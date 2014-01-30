@@ -242,10 +242,10 @@ function MapReduce(db) {
         var mods = promise(function (resolve, reject) {
           all(results).then(function (results) {
             //console.log('results', results)
-            var rows = results.map(function (row) {
+            var rows = results.map(function (row, i) {
               //console.log('emitted', row)
 
-              var view_key = [row.key, row.id, row.value];
+              var view_key = [row.key, row.id, row.value, i];
               return {
                 _id: pouchCollate.toIndexableString(view_key),
                 id: row.id,
@@ -278,7 +278,11 @@ function MapReduce(db) {
           }
 
           if (typeof options.limit !== 'undefined') {
-            opts.limit = options.limit;
+            // If reduce is on we can't optimize for this as we
+            // need all these rows to calculate reduce
+            if (options.reduce === false) {
+              opts.limit = options.limit;
+            }
           }
           if (typeof options.descending !== 'undefined') {
             opts.descending = options.descending;
