@@ -114,6 +114,8 @@ function MapReduce(db) {
         // FIXME: clone
         doc: JSON.parse(JSON.stringify(currentDoc))
       };
+
+
       results.push(promise(function (resolve, reject) {
         //in this special case, join on _id (issue #106)
         if (val && typeof val === 'object' && val._id) {
@@ -142,7 +144,7 @@ function MapReduce(db) {
 
     //only proceed once all documents are mapped and joined
     function processResults(results) {
-      console.log('\n\nprocessResults\n', results)
+      //console.log('\n\nprocessResults\n', results)
 
       var error;
 
@@ -170,7 +172,12 @@ function MapReduce(db) {
         });
       }
 
+    }
+
+    function doReduce(options, res) {
       var groups = [];
+      var results = res.rows;
+      var error = null;
       results.forEach(function (e) {
         var last = groups[groups.length - 1];
         if (last && collate(last.key[0][0], e.key) === 0) {
@@ -180,7 +187,7 @@ function MapReduce(db) {
         }
         groups.push({key: [
           [e.key, e.id]
-        ], value: [e.value]});
+          ], value: [e.value]});
       });
       groups.forEach(function (e) {
         e.value = fun.reduce(e.key, e.value);
@@ -198,7 +205,7 @@ function MapReduce(db) {
         total_rows: groups.length,
         offset: options.skip,
         rows: ('limit' in options) ? groups.slice(options.skip, options.limit + options.skip) :
-          (options.skip > 0) ? groups.slice(options.skip) : groups
+        (options.skip > 0) ? groups.slice(options.skip) : groups
       });
     }
 
@@ -213,7 +220,7 @@ function MapReduce(db) {
       conflicts: true,
       include_docs: true,
       onChange: function (change) {
-        console.log('\nonChange', change);
+        //console.log('\nonChange', change);
 
         results = [];
         if ('deleted' in change || change.id[0] === "_") {
@@ -229,11 +236,14 @@ function MapReduce(db) {
         // 2. this should be processed one by one because otherwise
         // we could mess up. Can we? Remember that in changes feed
         // one 
+        if (!results.length) {
+          return;
+        }
         var mods = promise(function (resolve, reject) {
           all(results).then(function (results) {
-            console.log('results', results)
+            //console.log('results', results)
             var rows = results.map(function (row) {
-              console.log('emitted', row)
+              //console.log('emitted', row)
 
               var view_key = [row.key, row.id, row.value];
               return {
@@ -246,7 +256,7 @@ function MapReduce(db) {
             });
             var b = view.bulkDocs({docs: rows});
             b.then(function () {
-              console.log('bulk finished')
+              //console.log('bulk finished')
             });
             resolve(b);
           });
@@ -257,20 +267,35 @@ function MapReduce(db) {
         all(modifications).then(function () {
           var opts = {include_docs: true};
 
+          if (typeof options.keys !== 'undefined') {
+            var results = options.keys.map(function (key) {
+              return db.query({key: key});
+            });
+            all(results).then(function (res) {
+              console.log(res);
+            }, options.complete);
+            return;
+          }
+
+          if (typeof options.limit !== 'undefined') {
+            opts.limit = options.limit;
+          }
+          if (typeof options.descending !== 'undefined') {
+            opts.descending = options.descending;
+          }
           if (typeof options.key !== 'undefined') {
             options.startkey = options.key;
             options.endkey = options.key;
           }
           if (typeof options.startkey !== 'undefined') {
             opts.startkey = pouchCollate.toIndexableString([options.startkey, null]);
-            console.log(opts)
           }
           if (typeof options.endkey !== 'undefined') {
             opts.endkey = pouchCollate.toIndexableString([options.endkey, {}]);
           }
 
           view.allDocs(opts).then(function (res) {
-            console.log('\n\nallDocs raw\n', res);
+            //console.log('\n\nallDocs raw\n', res);
 
             res.rows = res.rows.map(function (row) {
               return {
@@ -280,10 +305,15 @@ function MapReduce(db) {
                 doc: row.doc.doc
               };
             });
-            console.log('\n\nallDocs res', res);
-            options.complete(null, res);
+
+            //console.log('\n\nallDocs res', res);
+            if (options.reduce === false) {
+              options.complete(null, res);
+            } else {
+              doReduce(options, res);
+            }
           }, function (reason) {
-            console.log(reason);
+            console.log('ERROR', reason);
           });
         });
       }
@@ -293,6 +323,10 @@ function MapReduce(db) {
   this.query = function (fun, opts, callback) {
     if (typeof opts === 'function') {
       callback = opts;
+      opts = {};
+    }
+
+    if (typeof opts === 'undefined') {
       opts = {};
     }
 

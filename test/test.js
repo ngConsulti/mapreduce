@@ -46,8 +46,6 @@ function tests(dbName) {
             }
           }, {include_docs: true, reduce: false});
         }).then(function (res) {
-          console.log('testtesttest', JSON.stringify(res));
-
           res.rows.should.have.length(1, 'Dont include deleted documents');
           res.total_rows.should.equal(1, 'Include total_rows property.');
           res.rows.forEach(function (x, i) {
@@ -226,10 +224,6 @@ function tests(dbName) {
         });
       });
     });
-    if (1) {
-      return;
-    }
-
     it("Test joins", function () {
       var queryFun = {
         map: function (doc) {
@@ -290,7 +284,6 @@ function tests(dbName) {
         });
       }).should.become([2, 1]);
     });
-
     it("Built in _count reduce function", function () {
       return pouchPromise(dbName).then(function (db) {
         var bulk = denodify(db.bulkDocs);
@@ -446,6 +439,7 @@ function tests(dbName) {
         });
       });
     });
+
     it("Test view querying with limit option and reduce", function () {
       return pouchPromise(dbName).then(function (db) {
         var bulk = denodify(db.bulkDocs);
@@ -469,6 +463,10 @@ function tests(dbName) {
         res.rows[0].value.should.equal(2);
       });
     });
+    if (1) {
+      return;
+    }
+
     it("Test view querying with a skip option and reduce", function () {
       return pouchPromise(dbName).then(function (db) {
         var bulk = denodify(db.bulkDocs);
