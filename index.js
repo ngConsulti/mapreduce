@@ -103,14 +103,16 @@ function MapReduce(db) {
     }
 
     var results = [];
-    var current;
+    var currentDoc;
     var num_started = 0;
 
     function emit(key, val) {
       var viewRow = {
-        id: current.doc._id,
+        id: currentDoc._id,
         key: key,
-        value: val
+        value: val,
+        // FIXME: clone
+        doc: JSON.parse(JSON.stringify(currentDoc))
       };
       results.push(promise(function (resolve, reject) {
         //in this special case, join on _id (issue #106)
@@ -122,7 +124,6 @@ function MapReduce(db) {
             resolve(viewRow);
           });
         } else {
-          viewRow.doc = current.doc;
           resolve(viewRow);
         }
       }));
@@ -140,14 +141,16 @@ function MapReduce(db) {
     }
 
     //only proceed once all documents are mapped and joined
-    function doQuery() {
+    function processResults(results) {
+      console.log('\n\nprocessResults\n', results)
+
       var error;
 
       if (typeof options.keys !== 'undefined' && results.length) {
         // user supplied a keys param, sort by keys
         results = mapUsingKeys(results, options.keys);
       } else { // normal sorting
-        results.sort(function (a, b) {
+        results.rows.sort(function (a, b) {
           // sort by key, then id
           var keyCollate = collate(a.key, b.key);
           return keyCollate !== 0 ? keyCollate : collate(a.id, b.id);
@@ -157,6 +160,8 @@ function MapReduce(db) {
         results.reverse();
       }
       if (options.reduce === false) {
+        return options.complete(null, results);
+
         return options.complete(null, {
           total_rows: results.length,
           offset: options.skip,
@@ -198,7 +203,8 @@ function MapReduce(db) {
     }
 
     // TODO: what about slashes in db_name?
-    options.name = options.name.replace(/\//g, '_');
+    // TODO: where should we destroy it?
+    options.name = options.name.replace(/\//g, '_') + Math.random();
 
     var view = new PouchDB('_pouchdb_views_' + options.name);
 
@@ -206,29 +212,80 @@ function MapReduce(db) {
     db.changes({
       conflicts: true,
       include_docs: true,
-      onChange: function (doc) {
+      onChange: function (change) {
+        console.log('\nonChange', change);
+
         results = [];
-        if (!('deleted' in doc) && doc.id[0] !== "_") {
-          current = {doc: doc.doc};
-          fun.map.call(this, doc.doc);
+        if ('deleted' in change || change.id[0] === "_") {
+          return;
         }
-        // insert all results
-        all(results).then(function (results) {
-          var rows = results.map(function (row) {
-            var view_key = [row.key, row.id, row.value];
-            return {
-              _id: pouchCollate.toIndexableString(view_key),
-              id: row.id,
-              key: row.key,
-              value: row.value,
-              doc: doc
-            };
+        // FIXME: clone
+        // 
+        currentDoc = JSON.parse(JSON.stringify(change.doc));
+        fun.map.call(this, change.doc);
+
+        // problems:
+        // 1. we have to add map from _id to list of emitted values
+        // 2. this should be processed one by one because otherwise
+        // we could mess up. Can we? Remember that in changes feed
+        // one 
+        var mods = promise(function (resolve, reject) {
+          all(results).then(function (results) {
+            console.log('results', results)
+            var rows = results.map(function (row) {
+              console.log('emitted', row)
+
+              var view_key = [row.key, row.id, row.value];
+              return {
+                _id: pouchCollate.toIndexableString(view_key),
+                id: row.id,
+                key: row.key,
+                value: row.value,
+                doc: row.doc
+              };
+            });
+            var b = view.bulkDocs({docs: rows});
+            b.then(function () {
+              console.log('bulk finished')
+            });
+            resolve(b);
           });
-          modifications.push(view.bulkDocs({docs: rows}));
         });
+        modifications.push(mods);
       },
       complete: function () {
-        all(modifications).then(doQuery);
+        all(modifications).then(function () {
+          var opts = {include_docs: true};
+
+          if (typeof options.key !== 'undefined') {
+            options.startkey = options.key;
+            options.endkey = options.key;
+          }
+          if (typeof options.startkey !== 'undefined') {
+            opts.startkey = pouchCollate.toIndexableString([options.startkey, null]);
+            console.log(opts)
+          }
+          if (typeof options.endkey !== 'undefined') {
+            opts.endkey = pouchCollate.toIndexableString([options.endkey, {}]);
+          }
+
+          view.allDocs(opts).then(function (res) {
+            console.log('\n\nallDocs raw\n', res);
+
+            res.rows = res.rows.map(function (row) {
+              return {
+                id: row.doc.id,
+                key: row.doc.key,
+                value: row.doc.value,
+                doc: row.doc.doc
+              };
+            });
+            console.log('\n\nallDocs res', res);
+            options.complete(null, res);
+          }, function (reason) {
+            console.log(reason);
+          });
+        });
       }
     });
   }
@@ -238,7 +295,7 @@ function MapReduce(db) {
       callback = opts;
       opts = {};
     }
-    opts = opts || {};
+
     if (callback) {
       opts.complete = callback;
     }

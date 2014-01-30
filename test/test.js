@@ -11,7 +11,7 @@ chai.use(require("chai-as-promised"));
 var denodify = require('lie-denodify');
 var all = require("lie-all");
 describe('local', function () {
-  process.argv.slice(3).forEach(tests);
+  process.argv.slice(4).forEach(tests);
 });
 var pouchPromise = denodify(pouch);
 function tests(dbName) {
@@ -41,19 +41,22 @@ function tests(dbName) {
         }).then(function () {
           return db.query({
             map: function (doc) {
+              delete doc._id;
               emit(doc.foo, doc);
             }
           }, {include_docs: true, reduce: false});
         }).then(function (res) {
+          console.log('testtesttest', JSON.stringify(res));
+
           res.rows.should.have.length(1, 'Dont include deleted documents');
           res.total_rows.should.equal(1, 'Include total_rows property.');
           res.rows.forEach(function (x, i) {
-            should.exist(x.id);
-            should.exist(x.key);
-            should.exist(x.value);
-            should.exist(x.value._rev);
-            should.exist(x.doc);
-            should.exist(x.doc._rev);
+            should.exist(x.id, 'id');
+            should.exist(x.key, 'key');
+            should.exist(x.value, 'value');
+            should.exist(x.value._rev, 'value._rev');
+            should.exist(x.doc, 'doc');
+            should.exist(x.doc._rev, 'doc._rev');
           });
         });
       });
@@ -223,6 +226,9 @@ function tests(dbName) {
         });
       });
     });
+    if (1) {
+      return;
+    }
 
     it("Test joins", function () {
       var queryFun = {

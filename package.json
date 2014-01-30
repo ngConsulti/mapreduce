@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "./node_modules/.bin/jshint -c .jshintrc *.js test/*.js && ./node_modules/istanbul/lib/cli.js test ./node_modules/mocha/bin/_mocha test/test.js -- testDB http://localhost:5984/cwmtestdb",
-    "build": "mkdir -p dist && browserify index.js -s mapReduce -o dist/pouchdb-mapreduce.js"
+    "build": "mkdir -p dist && browserify index.js -s mapReduce -o dist/pouchdb-mapreduce.js",
+    "local": "./node_modules/mocha/bin/_mocha test/test.js -- testDB"
   },
   "keywords": [
     "pouch",
