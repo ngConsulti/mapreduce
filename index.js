@@ -23,43 +23,10 @@ function MapReduceError(name, msg, code) {
 }
 MapReduceError.prototype = new Error();
 
-function createKeysLookup(keys) {
-  // creates a lookup map for the given keys, so that doing
-  // query() with keys doesn't become an O(n * m) operation
-  // lookup values are typically integer indexes, but may
-  // map to a list of integers, since keys can be duplicated
-  var lookup = {};
-
-  for (var i = 0, len = keys.length; i < len; i++) {
-    var key = normalizeKey(keys[i]);
-    var val = lookup[key];
-    if (typeof val === 'undefined') {
-      lookup[key] = i;
-    } else if (typeof val === 'number') {
-      lookup[key] = [val, i];
-    } else { // array
-      val.push(i);
-    }
-  }
-
-  return lookup;
-}
-
 function sortByIdAndValue(a, b) {
   // sort by id, then value
   var idCompare = collate(a.id, b.id);
   return idCompare !== 0 ? idCompare : collate(a.value, b.value);
-}
-function addAtIndex(idx, result, prelimResults) {
-  var val = prelimResults[idx];
-  if (typeof val === 'undefined') {
-    prelimResults[idx] = result;
-  } else if (!Array.isArray(val)) {
-    // same key for multiple docs, need to preserve document order, so create array
-    prelimResults[idx] = [val, result];
-  } else { // existing array
-    val.push(result);
-  }
 }
 
 function sum(values) {
@@ -118,37 +85,18 @@ function MapReduce(db) {
     return new MapReduce(db);
   }
 
-  function mapUsingKeys(inputResults, keys, keysLookup) {
-    // create a new results array from the given array,
-    // ensuring that the following conditions are respected:
-    // 1. docs are ordered by key, then doc id
-    // 2. docs can appear >1 time in the list, if their key is specified >1 time
-    // 3. keys can be unknown, in which case there's just a hole in the returned array
+  function mapUsingKeys(inputResults, keys) {
+    inputResults.sort(sortByIdAndValue);
 
-    var prelimResults = new Array(keys.length);
-
-    inputResults.forEach(function (result) {
-      var idx = keysLookup[normalizeKey(result.key)];
-      if (typeof idx === 'number') {
-        addAtIndex(idx, result, prelimResults);
-      } else { // array of indices
-        idx.forEach(function (subIdx) {
-          addAtIndex(subIdx, result, prelimResults);
-        });
-      }
+    var results = [];
+    keys.forEach(function (key) {
+      inputResults.forEach(function (res) {
+        if (collate(key, res.key) === 0) {
+          results.push(res);
+        }
+      });
     });
-
-    // flatten the array, remove nulls, sort by doc ids
-    var outputResults = [];
-    prelimResults.forEach(function (result) {
-      if (Array.isArray(result)) {
-        outputResults = outputResults.concat(result.sort(sortByIdAndValue));
-      } else { // single result
-        outputResults.push(result);
-      }
-    });
-
-    return outputResults;
+    return results;
   }
 
   function viewQuery(fun, options) {
@@ -166,7 +114,6 @@ function MapReduce(db) {
     var current;
     var num_started = 0;
     var completed = false;
-    var keysLookup;
 
     function emit(key, val) {
       var viewRow = {
@@ -183,12 +130,6 @@ function MapReduce(db) {
       }
       if (typeof options.key !== 'undefined' && collate(key, options.key) !== 0) {
         return;
-      }
-      if (typeof options.keys !== 'undefined') {
-        keysLookup = keysLookup || createKeysLookup(options.keys);
-        if (typeof keysLookup[normalizeKey(key)] === 'undefined') {
-          return;
-        }
       }
 
       num_started++;
@@ -229,7 +170,7 @@ function MapReduce(db) {
 
         if (typeof options.keys !== 'undefined' && results.length) {
           // user supplied a keys param, sort by keys
-          results = mapUsingKeys(results, options.keys, keysLookup);
+          results = mapUsingKeys(results, options.keys);
         } else { // normal sorting
           results.sort(function (a, b) {
             // sort by key, then id
