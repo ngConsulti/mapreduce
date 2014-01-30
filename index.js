@@ -141,39 +141,7 @@ function MapReduce(db) {
         eval('fun.reduce = ' + fun.reduce.toString() + ';');
       }
     }
-
-    //only proceed once all documents are mapped and joined
-    function processResults(results) {
-      //console.log('\n\nprocessResults\n', results)
-
-      var error;
-
-      if (typeof options.keys !== 'undefined' && results.length) {
-        // user supplied a keys param, sort by keys
-        results = mapUsingKeys(results, options.keys);
-      } else { // normal sorting
-        results.rows.sort(function (a, b) {
-          // sort by key, then id
-          var keyCollate = collate(a.key, b.key);
-          return keyCollate !== 0 ? keyCollate : collate(a.id, b.id);
-        });
-      }
-      if (options.descending) {
-        results.reverse();
-      }
-      if (options.reduce === false) {
-        return options.complete(null, results);
-
-        return options.complete(null, {
-          total_rows: results.length,
-          offset: options.skip,
-          rows: ('limit' in options) ? results.slice(options.skip, options.limit + options.skip) :
-            (options.skip > 0) ? results.slice(options.skip) : results
-        });
-      }
-
-    }
-
+    
     function doReduce(options, res) {
       var groups = [];
       var results = res.rows;
@@ -249,7 +217,7 @@ function MapReduce(db) {
               return {
                 _id: pouchCollate.toIndexableString(view_key),
                 id: row.id,
-                key: row.key,
+                key: normalizeKey(row.key),
                 value: row.value,
                 doc: row.doc
               };
@@ -268,11 +236,22 @@ function MapReduce(db) {
           var opts = {include_docs: true};
 
           if (typeof options.keys !== 'undefined') {
+            if (options.keys.length === 0) {
+              options.complete(null, {rows: []});
+            }
             var results = options.keys.map(function (key) {
-              return db.query({key: key});
+              opts.key = key;
+              return db.query(fun, opts);
             });
             all(results).then(function (res) {
-              console.log(res);
+              var rows = res.reduce(function (prev, cur) {
+                return prev.concat(cur.rows);
+              }, []);
+
+              options.complete(null, {
+                total_rows: rows.length,
+                rows: rows
+              });
             }, options.complete);
             return;
           }
@@ -292,10 +271,10 @@ function MapReduce(db) {
             options.endkey = options.key;
           }
           if (typeof options.startkey !== 'undefined') {
-            opts.startkey = pouchCollate.toIndexableString([options.startkey, null]);
+            opts.startkey = pouchCollate.toIndexableString([normalizeKey(options.startkey), null]);
           }
           if (typeof options.endkey !== 'undefined') {
-            opts.endkey = pouchCollate.toIndexableString([options.endkey, {}]);
+            opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), {}]);
           }
 
           view.allDocs(opts).then(function (res) {
@@ -312,6 +291,8 @@ function MapReduce(db) {
 
             //console.log('\n\nallDocs res', res);
             if (options.reduce === false) {
+              res.rows = res.rows.slice(options.skip);
+
               options.complete(null, res);
             } else {
               doReduce(options, res);
@@ -372,6 +353,7 @@ function MapReduce(db) {
           opts.complete({ name: 'not_found', message: 'missing_named_view' });
           return;
         }
+
         viewQuery({
           map: doc.views[parts[1]].map,
           reduce: doc.views[parts[1]].reduce
