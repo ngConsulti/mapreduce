@@ -1,10 +1,13 @@
 'use strict';
 
+var PouchDB = require('pouchdb');
 var pouchCollate = require('pouchdb-collate');
 var Promise = require('lie');
 var collate = pouchCollate.collate;
 var normalizeKey = pouchCollate.normalizeKey;
 var httpQuery = require('./httpQuery.js');
+var promise = require('lie');
+var all = require('lie-all');
 // This is the first implementation of a basic plugin, we register the
 // plugin object with pouch and it is mixin'd to each database created
 // (regardless of adapter), adapters can override plugins by providing
@@ -91,7 +94,6 @@ function MapReduce(db) {
 
   function viewQuery(fun, options) {
     /*jshint evil: true */
-
     if (!options.skip) {
       options.skip = 0;
     }
@@ -103,7 +105,6 @@ function MapReduce(db) {
     var results = [];
     var current;
     var num_started = 0;
-    var completed = false;
 
     function emit(key, val) {
       var viewRow = {
@@ -111,35 +112,20 @@ function MapReduce(db) {
         key: key,
         value: val
       };
-
-      if (typeof options.startkey !== 'undefined' && collate(key, options.startkey) < 0) {
-        return;
-      }
-      if (typeof options.endkey !== 'undefined' && collate(key, options.endkey) > 0) {
-        return;
-      }
-      if (typeof options.key !== 'undefined' && collate(key, options.key) !== 0) {
-        return;
-      }
-
-      num_started++;
-      if (options.include_docs) {
+      results.push(promise(function (resolve, reject) {
         //in this special case, join on _id (issue #106)
         if (val && typeof val === 'object' && val._id) {
-          db.get(val._id,
-            function (_, joined_doc) {
-              if (joined_doc) {
-                viewRow.doc = joined_doc;
-              }
-              results.push(viewRow);
-              checkComplete();
-            });
-          return;
+          db.get(val._id, function (_, joined_doc) {
+            if (joined_doc) {
+              viewRow.doc = joined_doc;
+            }
+            resolve(viewRow);
+          });
         } else {
           viewRow.doc = current.doc;
+          resolve(viewRow);
         }
-      }
-      results.push(viewRow);
+      }));
     }
     // ugly way to make sure references to 'emit' in map/reduce bind to the
     // above emit
@@ -154,77 +140,95 @@ function MapReduce(db) {
     }
 
     //only proceed once all documents are mapped and joined
-    function checkComplete() {
+    function doQuery() {
       var error;
-      if (completed && results.length === num_started) {
 
-        if (typeof options.keys !== 'undefined' && results.length) {
-          // user supplied a keys param, sort by keys
-          results = mapUsingKeys(results, options.keys);
-        } else { // normal sorting
-          results.sort(function (a, b) {
-            // sort by key, then id
-            var keyCollate = collate(a.key, b.key);
-            return keyCollate !== 0 ? keyCollate : collate(a.id, b.id);
-          });
-        }
-        if (options.descending) {
-          results.reverse();
-        }
-        if (options.reduce === false) {
-          return options.complete(null, {
-            total_rows: results.length,
-            offset: options.skip,
-            rows: ('limit' in options) ? results.slice(options.skip, options.limit + options.skip) :
-              (options.skip > 0) ? results.slice(options.skip) : results
-          });
-        }
-
-        var groups = [];
-        results.forEach(function (e) {
-          var last = groups[groups.length - 1];
-          if (last && collate(last.key[0][0], e.key) === 0) {
-            last.key.push([e.key, e.id]);
-            last.value.push(e.value);
-            return;
-          }
-          groups.push({key: [
-            [e.key, e.id]
-          ], value: [e.value]});
-        });
-        groups.forEach(function (e) {
-          e.value = fun.reduce(e.key, e.value);
-          if (e.value.sumsqr && e.value.sumsqr instanceof MapReduceError) {
-            error = e.value;
-            return;
-          }
-          e.key = e.key[0][0];
-        });
-        if (error) {
-          options.complete(error);
-          return;
-        }
-        options.complete(null, {
-          total_rows: groups.length,
-          offset: options.skip,
-          rows: ('limit' in options) ? groups.slice(options.skip, options.limit + options.skip) :
-            (options.skip > 0) ? groups.slice(options.skip) : groups
+      if (typeof options.keys !== 'undefined' && results.length) {
+        // user supplied a keys param, sort by keys
+        results = mapUsingKeys(results, options.keys);
+      } else { // normal sorting
+        results.sort(function (a, b) {
+          // sort by key, then id
+          var keyCollate = collate(a.key, b.key);
+          return keyCollate !== 0 ? keyCollate : collate(a.id, b.id);
         });
       }
+      if (options.descending) {
+        results.reverse();
+      }
+      if (options.reduce === false) {
+        return options.complete(null, {
+          total_rows: results.length,
+          offset: options.skip,
+          rows: ('limit' in options) ? results.slice(options.skip, options.limit + options.skip) :
+            (options.skip > 0) ? results.slice(options.skip) : results
+        });
+      }
+
+      var groups = [];
+      results.forEach(function (e) {
+        var last = groups[groups.length - 1];
+        if (last && collate(last.key[0][0], e.key) === 0) {
+          last.key.push([e.key, e.id]);
+          last.value.push(e.value);
+          return;
+        }
+        groups.push({key: [
+          [e.key, e.id]
+        ], value: [e.value]});
+      });
+      groups.forEach(function (e) {
+        e.value = fun.reduce(e.key, e.value);
+        if (e.value.sumsqr && e.value.sumsqr instanceof MapReduceError) {
+          error = e.value;
+          return;
+        }
+        e.key = e.key[0][0];
+      });
+      if (error) {
+        options.complete(error);
+        return;
+      }
+      options.complete(null, {
+        total_rows: groups.length,
+        offset: options.skip,
+        rows: ('limit' in options) ? groups.slice(options.skip, options.limit + options.skip) :
+          (options.skip > 0) ? groups.slice(options.skip) : groups
+      });
     }
 
+    // TODO: what about slashes in db_name?
+    options.name = options.name.replace(/\//g, '_');
+
+    var view = new PouchDB('_pouchdb_views_' + options.name);
+
+    var modifications = [];
     db.changes({
       conflicts: true,
       include_docs: true,
       onChange: function (doc) {
+        results = [];
         if (!('deleted' in doc) && doc.id[0] !== "_") {
           current = {doc: doc.doc};
           fun.map.call(this, doc.doc);
         }
+        // insert all results
+        all(results).then(function (results) {
+          var rows = results.map(function (row) {
+            var view_key = [row.key, row.id, row.value];
+            return {
+              _id: pouchCollate.toIndexableString(view_key),
+              id: row.id,
+              key: row.key,
+              value: row.value,
+              doc: doc
+            };
+          });
+          modifications.push(view.bulkDocs({docs: rows}));
+        });
       },
       complete: function () {
-        completed = true;
-        checkComplete();
+        all(modifications).then(doQuery);
       }
     });
   }
@@ -257,6 +261,7 @@ function MapReduce(db) {
       }
 
       if (typeof fun === 'object') {
+        opts.name = 'temp_view';
         return viewQuery(fun, opts);
       }
 
@@ -266,6 +271,7 @@ function MapReduce(db) {
           opts.complete(err);
           return;
         }
+        opts.name = fun;
 
         if (!doc.views[parts[1]]) {
           opts.complete({ name: 'not_found', message: 'missing_named_view' });

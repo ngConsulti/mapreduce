@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "lie": "~2.5.1",
+    "lie-all": "~0.1.5",
     "pouchdb-collate": "~1.0.0"
   },
   "devDependencies": {
