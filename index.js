@@ -322,19 +322,16 @@ function MapReduce(db) {
         }
       };
 
+      if (typeof fun === 'function') {
+        fun = {map: fun};
+      }
+
       if (db.type() === 'http') {
-        if (typeof fun === 'function') {
-          return httpQuery({map: fun}, opts);
-        }
         return httpQuery(fun, opts);
       }
 
       if (typeof fun === 'object') {
         return viewQuery(fun, opts);
-      }
-
-      if (typeof fun === 'function') {
-        return viewQuery({map: fun}, opts);
       }
 
       var parts = fun.split('/');
