@@ -228,8 +228,8 @@ function MapReduce(db) {
 
           // pouchdb error #1276 workaround
           if (results.length === 0) {
-            return promise(function(fullfill){
-              fullfill();
+            return promise(function(fulfill){
+              fulfill();
             });
           }
 
