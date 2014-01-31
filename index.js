@@ -183,7 +183,7 @@ function MapReduce(db) {
       currentDoc = JSON.parse(JSON.stringify(doc));
       results = [];
       fun.map.call(this, doc);
-      return (results);
+      return all(results);
     }
 
 
@@ -211,7 +211,7 @@ function MapReduce(db) {
         // 2. this should be processed one by one because otherwise
         // we could mess up. Can we? Remember that in changes feed
         // one 
-        var mods = all(results).then(function (results) {
+        var mods = results.then(function (results) {
           //console.log('results', results)
           var rows = results.map(function (row, i) {
             //console.log('emitted', row)
