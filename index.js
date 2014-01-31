@@ -225,14 +225,6 @@ function MapReduce(db) {
               doc: row.doc
             };
           });
-
-          // pouchdb error #1276 workaround
-          if (results.length === 0) {
-            return promise(function(fulfill){
-              fulfill();
-            });
-          }
-
           return view.bulkDocs({docs: rows});
         });
         modifications.push(mods);
