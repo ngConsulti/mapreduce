@@ -186,121 +186,126 @@ function MapReduce(db) {
       return all(results);
     }
 
-
-
     // TODO: what about slashes in db_name?
     // TODO: where should we destroy it?
     options.name = options.name.replace(/\//g, '_') + Math.random();
 
     var view = new PouchDB('_pouchdb_views_' + options.name);
 
-    var modifications = [];
-    db.changes({
-      conflicts: true,
-      include_docs: true,
-      onChange: function (change) {
-        //console.log('\nonChange', change);
+    function updateView() {
+      return promise(function (fulfill, reject) {
+        var modifications = [];
+        db.changes({
+          conflicts: true,
+          include_docs: true,
+          onChange: function (change) {
 
-        if ('deleted' in change || change.id[0] === "_") {
-          return;
-        }
-        var results = doMap(change.doc);
-
-        // problems:
-        // 1. we have to add map from _id to list of emitted values
-        // 2. this should be processed one by one because otherwise
-        // we could mess up. Can we? Remember that in changes feed
-        // one 
-        var mods = results.then(function (results) {
-          //console.log('results', results)
-          var rows = results.map(function (row, i) {
-            //console.log('emitted', row)
-
-            var view_key = [row.key, row.id, row.value, i];
-            return {
-              _id: pouchCollate.toIndexableString(view_key),
-              id: row.id,
-              key: normalizeKey(row.key),
-              value: row.value,
-              doc: row.doc
-            };
-          });
-          return view.bulkDocs({docs: rows});
-        });
-        modifications.push(mods);
-      },
-      complete: function () {
-        all(modifications).then(function () {
-          var opts = {include_docs: true};
-
-          if (typeof options.keys !== 'undefined') {
-            if (options.keys.length === 0) {
-              options.complete(null, {rows: []});
+            if ('deleted' in change || change.id[0] === "_") {
+              return;
             }
-            var results = options.keys.map(function (key) {
-              opts.key = key;
-              return db.query(fun, opts);
-            });
-            all(results).then(function (res) {
-              var rows = res.reduce(function (prev, cur) {
-                return prev.concat(cur.rows);
-              }, []);
+            var results = doMap(change.doc);
 
-              options.complete(null, {
-                total_rows: rows.length,
-                rows: rows
+            // problems:
+            // 1. we have to add map from _id to list of emitted values
+            // 2. this should be processed one by one because otherwise
+            // we could mess up. Can we? Remember that in changes feed
+            // one 
+            var mods = results.then(function (results) {
+              //console.log('results', results)
+              var rows = results.map(function (row, i) {
+                //console.log('emitted', row)
+
+                var view_key = [row.key, row.id, row.value, i];
+                return {
+                  _id: pouchCollate.toIndexableString(view_key),
+                  id: row.id,
+                  key: normalizeKey(row.key),
+                  value: row.value,
+                  doc: row.doc
+                };
               });
-            }, options.complete);
-            return;
-          }
-
-          if (typeof options.limit !== 'undefined') {
-            // If reduce is on we can't optimize for this as we
-            // need all these rows to calculate reduce
-            if (options.reduce === false) {
-              opts.limit = options.limit;
-            }
-          }
-          if (typeof options.descending !== 'undefined') {
-            opts.descending = options.descending;
-          }
-          if (typeof options.key !== 'undefined') {
-            options.startkey = options.key;
-            options.endkey = options.key;
-          }
-          if (typeof options.startkey !== 'undefined') {
-            opts.startkey = pouchCollate.toIndexableString([normalizeKey(options.startkey), null]);
-          }
-          if (typeof options.endkey !== 'undefined') {
-            opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), {}]);
-          }
-
-          view.allDocs(opts).then(function (res) {
-            //console.log('\n\nallDocs raw\n', res);
-
-            res.rows = res.rows.map(function (row) {
-              return {
-                id: row.doc.id,
-                key: row.doc.key,
-                value: row.doc.value,
-                doc: row.doc.doc
-              };
+              return view.bulkDocs({docs: rows});
             });
-
-            //console.log('\n\nallDocs res', res);
-            if (options.reduce === false) {
-              res.rows = res.rows.slice(options.skip);
-
-              options.complete(null, res);
-            } else {
-              doReduce(options, res);
-            }
-          }, function (reason) {
-            console.log('ERROR', reason);
-          });
+            modifications.push(mods);
+          },
+          complete: function () {
+            fulfill(all(modifications));
+          }
         });
+      });
+    }
+
+    function doQuery () {
+      var opts = {include_docs: true};
+
+      if (typeof options.keys !== 'undefined') {
+        if (options.keys.length === 0) {
+          options.complete(null, {rows: []});
+        }
+        var results = options.keys.map(function (key) {
+          opts.key = key;
+          return db.query(fun, opts);
+        });
+        all(results).then(function (res) {
+          var rows = res.reduce(function (prev, cur) {
+            return prev.concat(cur.rows);
+          }, []);
+
+          options.complete(null, {
+            total_rows: rows.length,
+            rows: rows
+          });
+        }, options.complete);
+        return;
       }
-    });
+
+      if (typeof options.limit !== 'undefined') {
+        // If reduce is on we can't optimize for this as we
+        // need all these rows to calculate reduce
+        if (options.reduce === false) {
+          opts.limit = options.limit;
+        }
+      }
+      if (typeof options.descending !== 'undefined') {
+        opts.descending = options.descending;
+      }
+      if (typeof options.key !== 'undefined') {
+        options.startkey = options.key;
+        options.endkey = options.key;
+      }
+      if (typeof options.startkey !== 'undefined') {
+        opts.startkey = pouchCollate.toIndexableString([normalizeKey(options.startkey), null]);
+      }
+      if (typeof options.endkey !== 'undefined') {
+        opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), {}]);
+      }
+
+      view.allDocs(opts).then(function (res) {
+        //console.log('\n\nallDocs raw\n', res);
+
+        res.rows = res.rows.map(function (row) {
+          return {
+            id: row.doc.id,
+            key: row.doc.key,
+            value: row.doc.value,
+            doc: row.doc.doc
+          };
+        });
+
+        //console.log('\n\nallDocs res', res);
+        if (options.reduce === false) {
+          res.rows = res.rows.slice(options.skip);
+
+          options.complete(null, res);
+        } else {
+          doReduce(options, res);
+        }
+      }, function (reason) {
+        console.log('ERROR', reason);
+      });
+    }
+
+    updateView().then(doQuery);
   }
 
   this.query = function (fun, opts, callback) {
