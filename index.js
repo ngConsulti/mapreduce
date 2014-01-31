@@ -141,7 +141,7 @@ function MapReduce(db) {
         eval('fun.reduce = ' + fun.reduce.toString() + ';');
       }
     }
-    
+
     function doReduce(options, res) {
       var groups = [];
       var results = res.rows;
@@ -177,6 +177,17 @@ function MapReduce(db) {
       });
     }
 
+    // returns promise which resolves to array of emited (key, value)s
+    function doMap(doc) {
+      // FIXME: clone. Can we get rid of it?
+      currentDoc = JSON.parse(JSON.stringify(doc));
+      results = [];
+      fun.map.call(this, doc);
+      return (results);
+    }
+
+
+
     // TODO: what about slashes in db_name?
     // TODO: where should we destroy it?
     options.name = options.name.replace(/\//g, '_') + Math.random();
@@ -190,44 +201,39 @@ function MapReduce(db) {
       onChange: function (change) {
         //console.log('\nonChange', change);
 
-        results = [];
         if ('deleted' in change || change.id[0] === "_") {
           return;
         }
-        // FIXME: clone
-        // 
-        currentDoc = JSON.parse(JSON.stringify(change.doc));
-        fun.map.call(this, change.doc);
+        var results = doMap(change.doc);
 
         // problems:
         // 1. we have to add map from _id to list of emitted values
         // 2. this should be processed one by one because otherwise
         // we could mess up. Can we? Remember that in changes feed
         // one 
-        if (!results.length) {
-          return;
-        }
-        var mods = promise(function (resolve, reject) {
-          all(results).then(function (results) {
-            //console.log('results', results)
-            var rows = results.map(function (row, i) {
-              //console.log('emitted', row)
+        var mods = all(results).then(function (results) {
+          //console.log('results', results)
+          var rows = results.map(function (row, i) {
+            //console.log('emitted', row)
 
-              var view_key = [row.key, row.id, row.value, i];
-              return {
-                _id: pouchCollate.toIndexableString(view_key),
-                id: row.id,
-                key: normalizeKey(row.key),
-                value: row.value,
-                doc: row.doc
-              };
-            });
-            var b = view.bulkDocs({docs: rows});
-            b.then(function () {
-              //console.log('bulk finished')
-            });
-            resolve(b);
+            var view_key = [row.key, row.id, row.value, i];
+            return {
+              _id: pouchCollate.toIndexableString(view_key),
+              id: row.id,
+              key: normalizeKey(row.key),
+              value: row.value,
+              doc: row.doc
+            };
           });
+
+          // pouchdb error #1276 workaround
+          if (results.length === 0) {
+            return promise(function(fullfill){
+              fullfill();
+            });
+          }
+
+          return view.bulkDocs({docs: rows});
         });
         modifications.push(mods);
       },
