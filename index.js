@@ -8,6 +8,7 @@ var normalizeKey = pouchCollate.normalizeKey;
 var httpQuery = require('./httpQuery.js');
 var promise = require('lie');
 var all = require('lie-all');
+var extend = PouchDB.extend;
 // This is the first implementation of a basic plugin, we register the
 // plugin object with pouch and it is mixin'd to each database created
 // (regardless of adapter), adapters can override plugins by providing
@@ -93,6 +94,8 @@ function MapReduce(db) {
   }
 
   function viewQuery(fun, options) {
+    options = extend(true, {}, options);
+
     /*jshint evil: true */
     if (!options.skip) {
       options.skip = 0;
@@ -111,11 +114,9 @@ function MapReduce(db) {
         id: currentDoc._id,
         key: key,
         value: val,
-        // FIXME: clone
-        doc: JSON.parse(JSON.stringify(currentDoc))
+        // TODO: clone?
+        doc: extend(true, {}, currentDoc)
       };
-
-
       results.push(promise(function (resolve, reject) {
         //in this special case, join on _id (issue #106)
         if (val && typeof val === 'object' && val._id) {
@@ -179,8 +180,11 @@ function MapReduce(db) {
 
     // returns promise which resolves to array of emited (key, value)s
     function doMap(doc) {
+      //console.log('xxxxxxxxx', doc)
+
       // FIXME: clone. Can we get rid of it?
-      currentDoc = JSON.parse(JSON.stringify(doc));
+      currentDoc = extend(true, {}, doc);
+      //console.log('doMap', currentDoc);
       results = [];
       fun.map.call(this, doc);
       return all(results);
@@ -199,10 +203,10 @@ function MapReduce(db) {
           conflicts: true,
           include_docs: true,
           onChange: function (change) {
-
             if ('deleted' in change || change.id[0] === "_") {
               return;
             }
+
             var results = doMap(change.doc);
 
             // problems:
@@ -237,14 +241,15 @@ function MapReduce(db) {
 
     function doQuery () {
       var opts = {include_docs: true};
-
       if (typeof options.keys !== 'undefined') {
         if (options.keys.length === 0) {
           options.complete(null, {rows: []});
         }
-        var results = options.keys.map(function (key) {
-          opts.key = key;
-          return db.query(fun, opts);
+
+        var results = options.keys.map(function (key, i ) {
+          return db.query(fun, {
+            key: key
+          });
         });
         all(results).then(function (res) {
           var rows = res.reduce(function (prev, cur) {
