@@ -61,7 +61,7 @@ var builtInReduce = {
           if (typeof values[idx] === 'number') {
             _sumsqr += values[idx] * values[idx];
           } else {
-            return new MapReduceError(
+            throw MapReduceError(
               'builtin _stats function requires map values to be numbers',
               'invalid_value',
               500
@@ -160,9 +160,6 @@ function MapReduce(db) {
       });
       groups.forEach(function (e) {
         e.value = fun.reduce(e.key, e.value);
-        if (e.value.sumsqr && e.value.sumsqr instanceof MapReduceError) {
-          throw e.value.sumsqr;
-        }
         e.key = e.key[0][0];
       });
       return {
@@ -312,9 +309,15 @@ function MapReduce(db) {
     updateView().then(function () {
       return doQuery(options);
     }).then(function (res) {
+      // FIXME: maybe better place for this
+      if (!options.include_docs) {
+        res.rows.forEach(function (row) {
+          delete row.doc;
+        });
+      }
       options.complete(null, res);
     }, function (reason) {
-      console.log('ERROR', reason);
+      options.complete(reason);
     });
   }
 
