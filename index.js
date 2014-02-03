@@ -28,12 +28,6 @@ function MapReduceError(name, msg, code) {
 }
 MapReduceError.prototype = new Error();
 
-function sortByIdAndValue(a, b) {
-  // sort by id, then value
-  var idCompare = collate(a.id, b.id);
-  return idCompare !== 0 ? idCompare : collate(a.value, b.value);
-}
-
 function sum(values) {
   return values.reduce(function (a, b) {
     return a + b;
@@ -77,20 +71,6 @@ var builtInReduce = {
 function MapReduce(db) {
   if (!(this instanceof MapReduce)) {
     return new MapReduce(db);
-  }
-
-  function mapUsingKeys(inputResults, keys) {
-    inputResults.sort(sortByIdAndValue);
-
-    var results = [];
-    keys.forEach(function (key) {
-      inputResults.forEach(function (res) {
-        if (collate(key, res.key) === 0) {
-          results.push(res);
-        }
-      });
-    });
-    return results;
   }
 
   function viewQuery(fun, options) {
