@@ -709,7 +709,6 @@ function tests(dbName) {
         });
       });
     });
-      return;
 
     it('Testing query with multiple keys, multiple docs', function () {
       var mapFunction = function (doc) {
@@ -926,6 +925,7 @@ function tests(dbName) {
         });
       });
     });
+      return;
     it('should work with a joined doc', function () {
       function change(row) {
         return [row.key, row.doc._id, row.doc.val];

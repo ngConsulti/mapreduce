@@ -278,10 +278,13 @@ function MapReduce(db) {
         options.endkey = options.key;
       }
       if (typeof options.startkey !== 'undefined') {
-        opts.startkey = pouchCollate.toIndexableString([normalizeKey(options.startkey), null]);
+        // If normal order (not descending) throw here null so that
+        // this is smaller than any real key. For descending we have
+        // to be bigger than any key of this kind...
+        opts.startkey = pouchCollate.toIndexableString([normalizeKey(options.startkey), !options.descending ? null : {}]);
       }
       if (typeof options.endkey !== 'undefined') {
-        opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), {}]);
+        opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), !options.descending ? {} : null]);
       }
 
       return view.allDocs(opts).then(function (res) {
