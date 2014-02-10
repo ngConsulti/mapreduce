@@ -155,7 +155,10 @@ function MapReduce(db) {
     // TODO: where should we destroy it?
     options.name = options.name.replace(/\//g, '_') + Math.random();
 
+    // DISCUSSION: keep version here (in name) for possible future use?
+    // like updgrade.
     var view = new PouchDB('_pouchdb_views_' + options.name);
+    var viewMetadata = new PouchDB('_pouchdb_views_metadata_' + options.name);
 
     function updateView() {
       return promise(function (fulfill, reject) {
@@ -165,22 +168,27 @@ function MapReduce(db) {
           include_docs: true,
           onChange: function (change) {
             if ('deleted' in change || change.id[0] === "_") {
+              // TODO: remove from viewMetadata
               return;
             }
 
-            var results = doMap(change.doc);
+            var doc = change.doc;
+            var results = doMap(doc);
 
             // problems:
             // 1. we have to add map from _id to list of emitted values
             // 2. this should be processed one by one because otherwise
             // we could mess up. Can we? Remember that in changes feed
             // one 
+
             var mods = results.then(function (results) {
               //console.log('results', results)
+              var keys = [];
               var rows = results.map(function (row, i) {
                 //console.log('emitted', row)
 
                 var view_key = [row.key, row.id, row.value, i];
+                keys.push(view_key);
                 return {
                   _id: pouchCollate.toIndexableString(view_key),
                   id: row.id,
@@ -189,7 +197,16 @@ function MapReduce(db) {
                   doc: row.doc
                 };
               });
-              return view.bulkDocs({docs: rows});
+
+              var metaId = '_emitted_' + doc._id;
+              var updateMeta = viewMetadata.get(metaId).then(function (doc) {
+                return viewMetadata.put({_id: metaId, _rev: doc._rev, keys: keys});
+              }, function (err) {
+                return viewMetadata.put({_id: metaId, keys: keys});
+              });
+
+              var updateView = view.bulkDocs({docs: rows});
+              return all([updateMeta, updateView]);
             });
             modifications.push(mods);
           },
