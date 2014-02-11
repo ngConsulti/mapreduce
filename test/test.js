@@ -11,11 +11,12 @@ chai.use(require("chai-as-promised"));
 var denodify = require('lie-denodify');
 var all = require("lie-all");
 describe('local', function () {
-  if (process.argv.length) {
-    process.argv.slice(4).forEach(tests);
-  } else {
-    tests('testDB');
-  }
+//  if (process.argv.length) {
+//    process.argv.slice(4).forEach(tests);
+//  } else {
+//    tests('testDB');
+//  }
+  tests('testDB');
 });
 var pouchPromise = denodify(pouch);
 function tests(dbName) {
@@ -30,6 +31,39 @@ function tests(dbName) {
     });
   });
   describe('views', function () {
+    it("test incremental", function () {
+      function log () {
+        console.log('\x1b[33m');
+        console.log.apply(console.log, arguments);
+        console.log('\x1b[0m');
+      }
+      function fun (doc) {
+        emit(doc.name, doc.name * doc.name);
+      }
+
+      return pouchPromise(dbName).then(function (db) {
+        return db.bulkDocs({docs: [
+          {_id: 'a', name: 1},
+          {_id: 'b', name: 2}
+        ]}).then(function () {
+          return db.query(fun);
+        }).then(function (res) {
+          log('1. query', JSON.stringify(res, null, 2));
+
+      //  });
+          return db.get('a').then(function (doc) {
+            doc.name = 3;
+            return db.put(doc);
+          });
+        }).then(function() {
+          return db.query(fun);
+        }).then(function (res) {
+          log('2. query', JSON.stringify(res, null, 2));
+        });
+      });
+    });
+    return;
+
     it("Test basic view", function () {
       return pouchPromise(dbName).then(function (db) {
         var bulk = denodify(db.bulkDocs);

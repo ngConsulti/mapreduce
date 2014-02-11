@@ -83,7 +83,6 @@ function MapReduce(db) {
         id: currentDoc._id,
         key: key,
         value: val,
-        // TODO: clone?
         doc: extend(true, {}, currentDoc)
       };
       results.push(promise(function (resolve, reject) {
@@ -139,6 +138,16 @@ function MapReduce(db) {
       };
     }
 
+    // TODO: what about slashes in db_name?
+    // TODO: where should we destroy it?
+    options.name = options.name.replace(/\//g, '_'); // + Math.random();
+
+    // DISCUSSION: keep version here (in name) for possible future use?
+    // like updgrade.
+    var view = new PouchDB('_pouchdb_views_' + options.name);
+    var viewMetadata = new PouchDB('_pouchdb_views_metadata_' + options.name);
+
+
     // returns promise which resolves to array of emited (key, value)s
     function doMap(doc) {
       //console.log('xxxxxxxxx', doc)
@@ -151,67 +160,98 @@ function MapReduce(db) {
       return all(results);
     }
 
-    // TODO: what about slashes in db_name?
-    // TODO: where should we destroy it?
-    options.name = options.name.replace(/\//g, '_') + Math.random();
+    function getSeq() {
+      return viewMetadata.get('seq').then(function (doc) {
+        return doc.seq;
+      }, function (reason) {
+        return -1;
+      });
+    }
+    function setSeq(seq) {
+      return viewMetadata.get('seq').then(null, function (err) {
+        return {_id: 'seq'};
+      }).then(function (doc) {
+        doc.seq = seq;
+        return viewMetadata.put(doc);
+      });
+    }
 
-    // DISCUSSION: keep version here (in name) for possible future use?
-    // like updgrade.
-    var view = new PouchDB('_pouchdb_views_' + options.name);
-    var viewMetadata = new PouchDB('_pouchdb_views_metadata_' + options.name);
+    function updateView (seq) {
+      var queue = [];
+      function processChange (change) {
+        var doc = change.doc;
+        var metaDocId = 'emitted_map_' + doc._id;
 
-    function updateView() {
+        var cleanupIndex = viewMetadata.get(metaDocId).then(function (doc){
+          // remove those guys from view
+          var removePromises = doc.keys.map(function (key) {
+            return view.get(key).then(function (doc) {
+              return view.remove(doc);
+            }, function (reason) {
+              console.error('!!!!!!!!!!!!!!!!!!!!!!!!!! no doc');
+            });
+          });
+          return all(removePromises);
+        }, function (reason) {
+          console.log('* nothing to cleanup')
+          return; // it's ok - nothing to cleanup
+        });
+
+        // TODO: remove from viewMetadata
+        // if ('deleted' in change || change.id[0] === "_") {
+        //   return;
+        // }
+
+        var results = doMap(doc);
+        var stuff = all([results, cleanupIndex]).then(function (ok) {
+          var results = ok[0];
+
+          var keys = [];
+          var rows = results.map(function (row, i) {
+            console.log('emitted', row)
+
+            var viewKey = [row.key, row.id, row.value, i];
+            var strViewKey = pouchCollate.toIndexableString(viewKey);
+            keys.push(strViewKey);
+            return {
+              _id: strViewKey,
+              id: row.id,
+              key: normalizeKey(row.key),
+              value: row.value,
+              doc: row.doc
+            };
+          });
+
+          // save those keys
+          var saveMetadata = viewMetadata.get(metaDocId).then(null, function () {
+            return {_id: metaDocId};
+          }).then(function (doc) {
+            doc.keys = keys;
+            return viewMetadata.put(doc);
+          });
+
+          // once metadata is saved we can change the view index
+          var processIndex = saveMetadata.then(function () {
+            return view.bulkDocs({docs: rows});
+          });
+
+          return processIndex;
+        });
+        queue.push(stuff);
+      }
+
       return promise(function (fulfill, reject) {
-        var modifications = [];
         db.changes({
+          // TODO: what would happen if we failed to save the seq
+          // and so we retrieve those same changes once again???
+          since: seq,
           conflicts: true,
           include_docs: true,
-          onChange: function (change) {
-            if ('deleted' in change || change.id[0] === "_") {
-              // TODO: remove from viewMetadata
-              return;
-            }
-
-            var doc = change.doc;
-            var results = doMap(doc);
-
-            // problems:
-            // 1. we have to add map from _id to list of emitted values
-            // 2. this should be processed one by one because otherwise
-            // we could mess up. Can we? Remember that in changes feed
-            // one 
-
-            var mods = results.then(function (results) {
-              //console.log('results', results)
-              var keys = [];
-              var rows = results.map(function (row, i) {
-                //console.log('emitted', row)
-
-                var view_key = [row.key, row.id, row.value, i];
-                keys.push(view_key);
-                return {
-                  _id: pouchCollate.toIndexableString(view_key),
-                  id: row.id,
-                  key: normalizeKey(row.key),
-                  value: row.value,
-                  doc: row.doc
-                };
-              });
-
-              var metaId = '_emitted_' + doc._id;
-              var updateMeta = viewMetadata.get(metaId).then(function (doc) {
-                return viewMetadata.put({_id: metaId, _rev: doc._rev, keys: keys});
-              }, function (err) {
-                return viewMetadata.put({_id: metaId, keys: keys});
-              });
-
-              var updateView = view.bulkDocs({docs: rows});
-              return all([updateMeta, updateView]);
+          onChange: processChange,
+          complete: function (err, res) {
+            setSeq(res.last_seq).then(function () {
+              fulfill(all(queue));
             });
-            modifications.push(mods);
-          },
-          complete: function () {
-            fulfill(all(modifications));
           }
         });
       });
@@ -295,7 +335,11 @@ function MapReduce(db) {
       });
     }
 
-    updateView().then(function () {
+    getSeq().then(function (seq) {
+      console.log('seq is ', seq)
+
+      return updateView(seq);
+    }).then(function () {
       return doQuery(options);
     }).then(function (res) {
       // FIXME: maybe better place for this
@@ -306,6 +350,8 @@ function MapReduce(db) {
       }
       options.complete(null, res);
     }, function (reason) {
+      console.log('big error');
+
       options.complete(reason);
     });
   }
