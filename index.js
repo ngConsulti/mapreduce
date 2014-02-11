@@ -138,14 +138,19 @@ function MapReduce(db) {
       };
     }
 
+    // DISCUSSION: MD5? whatever?
+    options.name = options.name.replace(/\//g, '_');
     if (options.temp) {
       options.name += Math.random();
     }
 
     // DISCUSSION: keep version here (in name) for possible future use?
     // like updgrade.
-    var view = new PouchDB('_pouchdb_views_' + options.name);
-    var viewMetadata = new PouchDB('_pouchdb_views_metadata_' + options.name);
+    var VIEW_PREFIX = '_pouchdb_views_';
+    var VIEW_META_PREFIX = VIEW_PREFIX + 'metadata_';
+
+    var view = new PouchDB(VIEW_PREFIX + options.name);
+    var viewMetadata = new PouchDB(VIEW_META_PREFIX + options.name);
 
     // returns promise which resolves to array of emited (key, value)s
     function doMap(doc) {
@@ -193,7 +198,7 @@ function MapReduce(db) {
           var removeMetadata = viewMetadata.remove(doc);
           return all([all(removePromises), removeMetadata]);
         }, function (reason) {
-          console.log('* nothing to cleanup')
+          // console.log('* nothing to cleanup')
           return; // it's ok - nothing to cleanup
         });
 
@@ -208,7 +213,7 @@ function MapReduce(db) {
 
           var keys = [];
           var rows = results.map(function (row, i) {
-            console.log('emitted', row)
+            //console.log('emitted', row)
 
             var viewKey = [row.key, row.id, row.value, i];
             var strViewKey = pouchCollate.toIndexableString(viewKey);
@@ -251,14 +256,6 @@ function MapReduce(db) {
           onChange: processChange,
           complete: function (err, res) {
             setSeq(res.last_seq).then(function () {
-              console.log('jolo')
-              if (options.temp) {
-                console.log('yeah, temp')
-                PouchDB.destroy(options.name, function () {
-                  fulfill(all(queue));
-                });
-                return;
-              }
               fulfill(all(queue));
             });
           }
@@ -341,11 +338,26 @@ function MapReduce(db) {
         } else {
           return doReduce(options, res);
         }
-      });
+      }).then(cleanup);
+
+      // FIXME: don't like this
+      function cleanup (data) {
+        return promise(function(fulfill) {
+          if (options.temp) {
+            PouchDB.destroy(VIEW_PREFIX + options.name, function (err) {
+              PouchDB.destroy(VIEW_META_PREFIX + options.name, function () {
+                fulfill(data); // especially this!
+              });
+            });
+          }
+          fulfill(data); // and this
+        })
+      }
+      return retrievePromise;
     }
 
     return getSeq().then(function (seq) {
-      console.log('seq is ', seq)
+      // console.log('seq is ', seq)
 
       return updateView(seq);
     }).then(function () {
@@ -380,7 +392,6 @@ function MapReduce(db) {
     var parts = fun.split('/');
     return db.get('_design/' + parts[0]).then(function (doc) {
       opts.name = fun;
-
       if (!doc.views[parts[1]]) {
         throw { name: 'not_found', message: 'missing_named_view' };
       }

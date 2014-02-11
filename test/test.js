@@ -44,9 +44,20 @@ function tests(dbName) {
       return pouchPromise(dbName).then(function (db) {
         return db.bulkDocs({docs: [
           {_id: 'a', name: 1},
-          {_id: 'b', name: 2}
+          {_id: 'b', name: 2},
+          {
+            _id: '_design/test',
+            views: {
+              square: {
+                map: function (doc) {
+                  emit(doc.name, doc.name * doc.name);
+                }.toString()
+              }
+            }
+          }
         ]}).then(function () {
-          return db.query(fun);
+          //return db.query(fun);
+          return db.query('test/square');
         }).then(function (res) {
           log('1. query', JSON.stringify(res, null, 2));
 
@@ -55,7 +66,8 @@ function tests(dbName) {
             return db.put(doc);
           });
         }).then(function() {
-          return db.query(fun);
+          //return db.query(fun);
+          return db.query('test/square');
         }).then(function (res) {
           log('2. query', JSON.stringify(res, null, 2));
         });
