@@ -138,15 +138,14 @@ function MapReduce(db) {
       };
     }
 
-    // TODO: what about slashes in db_name?
-    // TODO: where should we destroy it?
-    options.name = options.name.replace(/\//g, '_'); // + Math.random();
+    if (options.temp) {
+      options.name += Math.random();
+    }
 
     // DISCUSSION: keep version here (in name) for possible future use?
     // like updgrade.
     var view = new PouchDB('_pouchdb_views_' + options.name);
     var viewMetadata = new PouchDB('_pouchdb_views_metadata_' + options.name);
-
 
     // returns promise which resolves to array of emited (key, value)s
     function doMap(doc) {
@@ -191,16 +190,17 @@ function MapReduce(db) {
               console.error('!!!!!!!!!!!!!!!!!!!!!!!!!! no doc');
             });
           });
-          return all(removePromises);
+          var removeMetadata = viewMetadata.remove(doc);
+          return all([all(removePromises), removeMetadata]);
         }, function (reason) {
           console.log('* nothing to cleanup')
           return; // it's ok - nothing to cleanup
         });
 
-        // TODO: remove from viewMetadata
-        // if ('deleted' in change || change.id[0] === "_") {
-        //   return;
-        // }
+        if ('deleted' in change || change.id[0] === "_") {
+          queue.push(cleanupIndex);
+          return;
+        }
 
         var results = doMap(doc);
         var stuff = all([results, cleanupIndex]).then(function (ok) {
@@ -240,6 +240,7 @@ function MapReduce(db) {
         queue.push(stuff);
       }
 
+
       return promise(function (fulfill, reject) {
         db.changes({
           // TODO: what would happen if we failed to save the seq
@@ -250,6 +251,14 @@ function MapReduce(db) {
           onChange: processChange,
           complete: function (err, res) {
             setSeq(res.last_seq).then(function () {
+              console.log('jolo')
+              if (options.temp) {
+                console.log('yeah, temp')
+                PouchDB.destroy(options.name, function () {
+                  fulfill(all(queue));
+                });
+                return;
+              }
               fulfill(all(queue));
             });
           }
@@ -335,7 +344,7 @@ function MapReduce(db) {
       });
     }
 
-    getSeq().then(function (seq) {
+    return getSeq().then(function (seq) {
       console.log('seq is ', seq)
 
       return updateView(seq);
@@ -348,74 +357,61 @@ function MapReduce(db) {
           delete row.doc;
         });
       }
-      options.complete(null, res);
+
+      return res;
     }, function (reason) {
       console.log('big error');
 
-      options.complete(reason);
+      throw reason;
     });
   }
+
+  var queryPromised = function (fun, opts) {
+    if (db.type() === 'http') {
+      return httpQuery(db, fun, opts);
+    }
+
+    if (typeof fun === 'object') {
+      opts.name = '_temp_view';
+      opts.temp = true;
+      return viewQuery(fun, opts);
+    }
+
+    var parts = fun.split('/');
+    return db.get('_design/' + parts[0]).then(function (doc) {
+      opts.name = fun;
+
+      if (!doc.views[parts[1]]) {
+        throw { name: 'not_found', message: 'missing_named_view' };
+      }
+
+      return viewQuery({
+        map: doc.views[parts[1]].map,
+        reduce: doc.views[parts[1]].reduce
+      }, opts);
+    });
+  };
 
   this.query = function (fun, opts, callback) {
     if (typeof opts === 'function') {
       callback = opts;
       opts = {};
     }
-
     if (typeof opts === 'undefined') {
       opts = {};
     }
-
     if (callback) {
       opts.complete = callback;
     }
-    var realCB = opts.complete;
-    var promise = new Promise(function (resolve, reject) {
-      opts.complete = function (err, data) {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(data);
-        }
-      };
-
-      if (typeof fun === 'function') {
-        fun = {map: fun};
-      }
-
-      if (db.type() === 'http') {
-        return httpQuery(db, fun, opts);
-      }
-
-      if (typeof fun === 'object') {
-        opts.name = 'temp_view';
-        return viewQuery(fun, opts);
-      }
-
-      var parts = fun.split('/');
-      db.get('_design/' + parts[0], function (err, doc) {
-        if (err) {
-          opts.complete(err);
-          return;
-        }
-        opts.name = fun;
-
-        if (!doc.views[parts[1]]) {
-          opts.complete({ name: 'not_found', message: 'missing_named_view' });
-          return;
-        }
-
-        viewQuery({
-          map: doc.views[parts[1]].map,
-          reduce: doc.views[parts[1]].reduce
-        }, opts);
-      });
-    });
-    if (realCB) {
-      promise.then(function (resp) {
-        realCB(null, resp);
-      }, realCB);
+    if (typeof fun === 'function') {
+      fun = {map: fun};
     }
+    var promise = queryPromised(fun, opts);
+    promise.then(function (value) {
+      if (opts.complete) {
+        opts.complete(null, value);
+      }
+    }, opts.complete);
     return promise;
   };
 }

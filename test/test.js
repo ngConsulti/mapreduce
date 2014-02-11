@@ -50,7 +50,6 @@ function tests(dbName) {
         }).then(function (res) {
           log('1. query', JSON.stringify(res, null, 2));
 
-      //  });
           return db.get('a').then(function (doc) {
             doc.name = 3;
             return db.put(doc);
