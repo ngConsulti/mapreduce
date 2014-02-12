@@ -33,6 +33,10 @@ function tests(dbName) {
   describe('views', function () {
     it("perf", function () {
       return pouchPromise(dbName).then(function (db) {
+        var docs = [];
+        for (var i = 0; i < 2000; i++) {
+          docs.push({val: i});
+        }
         var seq = db.put({
           _id: '_design/test',
           views: {
@@ -43,13 +47,13 @@ function tests(dbName) {
             }
           }
         });
-        var n = 0;
-        for (var i = 0; i < 300; i++) {
+        seq = seq.then(function () {
+          return db.bulkDocs({docs: docs});
+        });
+        for (var i = 0; i < 5; i++) {
           seq = seq.then(function () {
-            return db.post({val: ++n}).then(function () {
-              return db.query('test/square', {key: 10, reduce: false}).then(function (res) {
-                console.log(res);
-              });
+            return db.query('test/square', {key: 10, reduce: false}).then(function (res) {
+              console.log(res);
             });
           });
         }

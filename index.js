@@ -249,6 +249,10 @@ function MapReduce(db) {
         var doc = change.doc;
         var metaDocId = 'emitted_map_' + doc._id;
 
+        if (change.id[0] === '_') {
+          return;
+        }
+
         var cleanupIndex = viewMetadata.get(metaDocId).then(function (doc){
           // remove those guys from view
           var removePromises = doc.keys.map(function (key) {
@@ -265,7 +269,7 @@ function MapReduce(db) {
           return; // it's ok - nothing to cleanup
         });
 
-        if ('deleted' in change || change.id[0] === "_") {
+        if ('deleted' in change) {
           queue.push(cleanupIndex);
           return;
         }
@@ -309,7 +313,9 @@ function MapReduce(db) {
       }
 
 
+
       return promise(function (fulfill, reject) {
+        console.time('x');
         db.changes({
           // TODO: what would happen if we failed to save the seq
           // and so we retrieve those same changes once again???
@@ -318,6 +324,9 @@ function MapReduce(db) {
           include_docs: true,
           onChange: processChange,
           complete: function (err, res) {
+            if (!res.last_seq) {
+              res.last_seq = seq;
+            }
             setSeq(res.last_seq).then(function () {
               fulfill(all(queue));
             });
