@@ -23,6 +23,18 @@ function sum(values) {
   }, 0);
 }
 
+// #1377 workaround
+function destroy(name) {
+  return promise(function (fulfill, reject) {
+    PouchDB.destroy(name, function (reason, value) {
+      if (!reason) {
+        return fulfill(value);
+      }
+      reject(reason);
+    });
+  });
+}
+
 var builtInReduce = {
   "_sum": function (keys, values) {
     return sum(values);
@@ -99,18 +111,63 @@ function Mutex() {
 }
 
 function MapReduce(db) {
+  var mutex = new Mutex();
+
   if (!(this instanceof MapReduce)) {
     return new MapReduce(db);
   }
 
-  // PouchDB.on('destroy', function (name) {
-  //   if (!/_pouchdb_/.test(name)) {
-  //     PouchDB.destroy(VIEW_PREFIX + name)
-  //     PouchDB.destroy(VIEW_META_PREFIX + name)
-  //   }
-  // });
+  PouchDB.on('destroy', function (name) {
+    if (!/_pouchdb_/.test(name)) {
+      mutex(function () {
+        return all([
+          destroy(VIEW_PREFIX + name),
+          destroy(VIEW_META_PREFIX + name)
+        ]);
+      });
+    }
+  });
 
-  function viewQuery(fun, options) {
+  // This one would be necessary to do only if we don't get
+  // PouchDB destroy notification
+  function cleanupDBs () {
+    // 1. retrieve dbs names from some meta
+    // 2. remove all outdated
+    // 3. update meta
+  }
+
+  // TODO: remembering so that we could destroy them later
+  // 1. check if db has _local/mapreduce_name document
+  // 2. if not: destroy PouchDBs with those names
+  // 3. remember dbs to be constructed in our meta
+  // 4. create PouchDBs with those names
+  function initViewDB (name) {
+    var viewName = VIEW_PREFIX + name;
+    var viewMetadataName = VIEW_META_PREFIX + name;
+
+
+    var lockName = '_local/mapreduce' + name;
+    return db.get(lockName).then(null, function () {
+      // not initialized yet
+      return all([destroy(viewName), destroy(viewMetadataName)])
+      .then(null, function (reason) {
+        if (reason.status === 404) {
+          return;
+        }
+        throw reason;
+      })
+      .then(function () {
+        return db.put({_id: lockName});
+      });
+    }).then(function() {
+      return [
+        new PouchDB(viewName),
+        new PouchDB(viewMetadataName)
+      ];
+    });
+  }
+
+  function viewQuery(view, viewMetadata, fun, options) {
     options = extend(true, {}, options);
 
     /*jshint evil: true */
@@ -169,30 +226,6 @@ function MapReduce(db) {
       } else {
         eval('fun.reduce = ' + fun.reduce.toString() + ';');
       }
-    }
-
-    // DISCUSSION: MD5? whatever?
-    options.name = options.name.replace(/\//g, '_');
-    // if (options.temp) {
-      options.name += Math.random();
-    // }
-
-    var view = new PouchDB(VIEW_PREFIX + options.name);
-    var viewMetadata = new PouchDB(VIEW_META_PREFIX + options.name);
-
-    // It would be nice to do it outside of doQuery so that this stuff is
-    // already prepared
-    function initViewDB () {
-      // 1. check if db has _local/mapreduce document
-      // 2. if not: destroy PouchDBs with those names
-      // 3. remember dbs to be constructed in our meta
-      // 4. create PouchDBs with those names
-    }
-
-    function cleanupDBs () {
-      // 1. retrieve dbs names from some meta
-      // 2. remove all outdated
-      // 3. update meta
     }
 
     function getSeq() {
@@ -350,28 +383,7 @@ function MapReduce(db) {
         opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), !options.descending ? {} : null]);
       }
 
-      // FIXME: don't like this
-      // this is cleanup for temp view
-      function cleanup (data) {
-        return promise(function(fulfill) {
-          if (options.temp) {
-            PouchDB.destroy(VIEW_PREFIX + options.name, function (err) {
-              if (err) {
-                console.log('XXXXXXXXXXX', err);
-              }
-              PouchDB.destroy(VIEW_META_PREFIX + options.name, function (err) {
-                if (err) {
-                  console.log('XXXXXXXXXXX', err);
-                }
-                fulfill(); // especially this!
-              });
-            });
-          }
-          fulfill(); // and this
-        })
-      }
-
-      var dataPromise = view.allDocs(opts).then(function (res) {
+      return view.allDocs(opts).then(function (res) {
         res.rows = res.rows.map(function (row) {
           return {
             id: row.doc.id,
@@ -388,17 +400,6 @@ function MapReduce(db) {
         } else {
           return doReduce(fun, options, res);
         }
-      });
-
-      // FIXME: no finally in promise library, sorry
-      return dataPromise.then(function (value) {
-        return cleanup().then(function () {
-          return value;
-        });
-      }, function (reason) {
-        return cleanup().then(function () {
-          throw reason;
-        });
       });
     }
 
@@ -429,23 +430,27 @@ function MapReduce(db) {
       return httpQuery(db, fun, opts);
     }
 
-    if (typeof fun === 'object') {
-      opts.name = '_temp_view';
-      opts.temp = true;
-      return viewQuery(fun, opts);
-    }
+    var name = fun.replace(/\//g, '_');
 
-    var parts = fun.split('/');
-    return db.get('_design/' + parts[0]).then(function (doc) {
-      opts.name = fun;
-      if (!doc.views[parts[1]]) {
-        throw { name: 'not_found', message: 'missing_named_view' };
-      }
+    // TODO: temp views
+    // if (typeof fun === 'object') {
+    //   opts.name = '_temp_view';
+    //   opts.temp = true;
+    //   return viewQuery(fun, opts);
+    // }
+    return initViewDB(name).then(function (pouchs) {
 
-      return viewQuery({
-        map: doc.views[parts[1]].map,
-        reduce: doc.views[parts[1]].reduce
-      }, opts);
+      var parts = fun.split('/');
+      return db.get('_design/' + parts[0]).then(function (doc) {
+        if (!doc.views[parts[1]]) {
+          throw { name: 'not_found', message: 'missing_named_view' };
+        }
+
+        return viewQuery(pouchs[0], pouchs[1], {
+          map: doc.views[parts[1]].map,
+          reduce: doc.views[parts[1]].reduce
+        }, opts);
+      });
     });
   };
 

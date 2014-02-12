@@ -31,6 +31,7 @@ function tests(dbName) {
     });
   });
   describe('views', function () {
+    for (var i = 0; i < 20; i++) {
     it("test incremental", function () {
       function log () {
         console.log('\x1b[33m');
@@ -73,7 +74,8 @@ function tests(dbName) {
         });
       });
     });
-    //return;
+    }
+    return;
 
     it("Test basic view", function () {
       return pouchPromise(dbName).then(function (db) {
