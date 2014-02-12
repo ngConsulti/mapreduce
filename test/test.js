@@ -73,7 +73,7 @@ function tests(dbName) {
         });
       });
     });
-    return;
+    //return;
 
     it("Test basic view", function () {
       return pouchPromise(dbName).then(function (db) {

@@ -44,7 +44,7 @@ var builtInReduce = {
           if (typeof values[idx] === 'number') {
             _sumsqr += values[idx] * values[idx];
           } else {
-            throw MapReduceError(
+            throw new MapReduceError(
               'builtin _stats function requires map values to be numbers',
               'invalid_value',
               500
@@ -57,10 +57,58 @@ var builtInReduce = {
   }
 };
 
+function doReduce(fun, options, res) {
+  var groups = [];
+  var results = res.rows;
+  var error = null;
+  results.forEach(function (e) {
+    var last = groups[groups.length - 1];
+    if (last && collate(last.key[0][0], e.key) === 0) {
+      last.key.push([e.key, e.id]);
+      last.value.push(e.value);
+      return;
+    }
+    groups.push({key: [
+                [e.key, e.id]
+    ], value: [e.value]});
+  });
+  groups.forEach(function (e) {
+    e.value = fun.reduce(e.key, e.value);
+    e.key = e.key[0][0];
+  });
+  return {
+    total_rows: groups.length,
+    offset: options.skip,
+    rows: ('limit' in options) ? groups.slice(options.skip, options.limit + options.skip) :
+      (options.skip > 0) ? groups.slice(options.skip) : groups
+  };
+}
+
+// DISCUSSION: keep version here (in name) for possible future use?
+// like updgrade.
+var VIEW_PREFIX = '_pouchdb_views_';
+var VIEW_META_PREFIX = VIEW_PREFIX + 'metadata_';
+
+function Mutex() {
+  var queue = new promise(function (fulfill) {fulfill();});
+  return function (block) {
+    queue = queue.then(null, function() {
+      // recover
+    }).then(block);
+  };
+}
+
 function MapReduce(db) {
   if (!(this instanceof MapReduce)) {
     return new MapReduce(db);
   }
+
+  // PouchDB.on('destroy', function (name) {
+  //   if (!/_pouchdb_/.test(name)) {
+  //     PouchDB.destroy(VIEW_PREFIX + name)
+  //     PouchDB.destroy(VIEW_META_PREFIX + name)
+  //   }
+  // });
 
   function viewQuery(fun, options) {
     options = extend(true, {}, options);
@@ -76,7 +124,6 @@ function MapReduce(db) {
 
     var results = [];
     var currentDoc;
-    var num_started = 0;
 
     function emit(key, val) {
       var viewRow = {
@@ -99,6 +146,19 @@ function MapReduce(db) {
         }
       }));
     }
+
+    // returns promise which resolves to array of emited (key, value)s
+    function doMap(doc) {
+      //console.log('xxxxxxxxx', doc)
+
+      // FIXME: clone. Can we get rid of it?
+      currentDoc = extend(true, {}, doc);
+      //console.log('doMap', currentDoc);
+      results = [];
+      fun.map.call(this, doc);
+      return all(results);
+    }
+
     // ugly way to make sure references to 'emit' in map/reduce bind to the
     // above emit
 
@@ -111,57 +171,28 @@ function MapReduce(db) {
       }
     }
 
-    function doReduce(options, res) {
-      var groups = [];
-      var results = res.rows;
-      var error = null;
-      results.forEach(function (e) {
-        var last = groups[groups.length - 1];
-        if (last && collate(last.key[0][0], e.key) === 0) {
-          last.key.push([e.key, e.id]);
-          last.value.push(e.value);
-          return;
-        }
-        groups.push({key: [
-          [e.key, e.id]
-          ], value: [e.value]});
-      });
-      groups.forEach(function (e) {
-        e.value = fun.reduce(e.key, e.value);
-        e.key = e.key[0][0];
-      });
-      return {
-        total_rows: groups.length,
-        offset: options.skip,
-        rows: ('limit' in options) ? groups.slice(options.skip, options.limit + options.skip) :
-        (options.skip > 0) ? groups.slice(options.skip) : groups
-      };
-    }
-
     // DISCUSSION: MD5? whatever?
     options.name = options.name.replace(/\//g, '_');
-    if (options.temp) {
+    // if (options.temp) {
       options.name += Math.random();
-    }
-
-    // DISCUSSION: keep version here (in name) for possible future use?
-    // like updgrade.
-    var VIEW_PREFIX = '_pouchdb_views_';
-    var VIEW_META_PREFIX = VIEW_PREFIX + 'metadata_';
+    // }
 
     var view = new PouchDB(VIEW_PREFIX + options.name);
     var viewMetadata = new PouchDB(VIEW_META_PREFIX + options.name);
 
-    // returns promise which resolves to array of emited (key, value)s
-    function doMap(doc) {
-      //console.log('xxxxxxxxx', doc)
+    // It would be nice to do it outside of doQuery so that this stuff is
+    // already prepared
+    function initViewDB () {
+      // 1. check if db has _local/mapreduce document
+      // 2. if not: destroy PouchDBs with those names
+      // 3. remember dbs to be constructed in our meta
+      // 4. create PouchDBs with those names
+    }
 
-      // FIXME: clone. Can we get rid of it?
-      currentDoc = extend(true, {}, doc);
-      //console.log('doMap', currentDoc);
-      results = [];
-      fun.map.call(this, doc);
-      return all(results);
+    function cleanupDBs () {
+      // 1. retrieve dbs names from some meta
+      // 2. remove all outdated
+      // 3. update meta
     }
 
     function getSeq() {
@@ -319,9 +350,28 @@ function MapReduce(db) {
         opts.endkey = pouchCollate.toIndexableString([normalizeKey(options.endkey), !options.descending ? {} : null]);
       }
 
-      return view.allDocs(opts).then(function (res) {
-        //console.log('\n\nallDocs raw\n', res);
+      // FIXME: don't like this
+      // this is cleanup for temp view
+      function cleanup (data) {
+        return promise(function(fulfill) {
+          if (options.temp) {
+            PouchDB.destroy(VIEW_PREFIX + options.name, function (err) {
+              if (err) {
+                console.log('XXXXXXXXXXX', err);
+              }
+              PouchDB.destroy(VIEW_META_PREFIX + options.name, function (err) {
+                if (err) {
+                  console.log('XXXXXXXXXXX', err);
+                }
+                fulfill(); // especially this!
+              });
+            });
+          }
+          fulfill(); // and this
+        })
+      }
 
+      var dataPromise = view.allDocs(opts).then(function (res) {
         res.rows = res.rows.map(function (row) {
           return {
             id: row.doc.id,
@@ -336,24 +386,20 @@ function MapReduce(db) {
           res.rows = res.rows.slice(options.skip);
           return res;
         } else {
-          return doReduce(options, res);
+          return doReduce(fun, options, res);
         }
-      }).then(cleanup);
+      });
 
-      // FIXME: don't like this
-      function cleanup (data) {
-        return promise(function(fulfill) {
-          if (options.temp) {
-            PouchDB.destroy(VIEW_PREFIX + options.name, function (err) {
-              PouchDB.destroy(VIEW_META_PREFIX + options.name, function () {
-                fulfill(data); // especially this!
-              });
-            });
-          }
-          fulfill(data); // and this
-        })
-      }
-      return retrievePromise;
+      // FIXME: no finally in promise library, sorry
+      return dataPromise.then(function (value) {
+        return cleanup().then(function () {
+          return value;
+        });
+      }, function (reason) {
+        return cleanup().then(function () {
+          throw reason;
+        });
+      });
     }
 
     return getSeq().then(function (seq) {
