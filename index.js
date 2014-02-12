@@ -110,23 +110,23 @@ function Mutex() {
   };
 }
 
+var mutex = new Mutex();
+PouchDB.on('destroy', function (name) {
+  if (!/_pouchdb_/.test(name)) {
+    mutex(function () {
+      return all([
+        destroy(VIEW_PREFIX + name),
+        destroy(VIEW_META_PREFIX + name)
+      ]);
+    });
+  }
+});
+
 function MapReduce(db) {
-  var mutex = new Mutex();
 
   if (!(this instanceof MapReduce)) {
     return new MapReduce(db);
   }
-
-  PouchDB.on('destroy', function (name) {
-    if (!/_pouchdb_/.test(name)) {
-      mutex(function () {
-        return all([
-          destroy(VIEW_PREFIX + name),
-          destroy(VIEW_META_PREFIX + name)
-        ]);
-      });
-    }
-  });
 
   // This one would be necessary to do only if we don't get
   // PouchDB destroy notification
@@ -144,7 +144,6 @@ function MapReduce(db) {
   function initViewDB (name) {
     var viewName = VIEW_PREFIX + name;
     var viewMetadataName = VIEW_META_PREFIX + name;
-
 
     var lockName = '_local/mapreduce' + name;
     return db.get(lockName).then(null, function () {
@@ -426,6 +425,7 @@ function MapReduce(db) {
   }
 
   var queryPromised = function (fun, opts) {
+
     if (db.type() === 'http') {
       return httpQuery(db, fun, opts);
     }
@@ -445,6 +445,7 @@ function MapReduce(db) {
         if (!doc.views[parts[1]]) {
           throw { name: 'not_found', message: 'missing_named_view' };
         }
+
 
         return viewQuery(pouchs[0], pouchs[1], {
           map: doc.views[parts[1]].map,

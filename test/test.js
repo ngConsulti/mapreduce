@@ -31,7 +31,33 @@ function tests(dbName) {
     });
   });
   describe('views', function () {
-    for (var i = 0; i < 20; i++) {
+    it("perf", function () {
+      return pouchPromise(dbName).then(function (db) {
+        var seq = db.put({
+          _id: '_design/test',
+          views: {
+            square: {
+              map: function (doc) {
+                emit(doc.val, doc.val * doc.val);
+              }.toString()
+            }
+          }
+        });
+        var n = 0;
+        for (var i = 0; i < 300; i++) {
+          seq = seq.then(function () {
+            return db.post({val: ++n}).then(function () {
+              return db.query('test/square', {key: 10, reduce: false}).then(function (res) {
+                console.log(res);
+              });
+            });
+          });
+        }
+        return seq;
+      });
+    });
+
+    return;
     it("test incremental", function () {
       function log () {
         console.log('\x1b[33m');
@@ -57,7 +83,6 @@ function tests(dbName) {
             }
           }
         ]}).then(function () {
-          //return db.query(fun);
           return db.query('test/square');
         }).then(function (res) {
           log('1. query', JSON.stringify(res, null, 2));
@@ -67,14 +92,12 @@ function tests(dbName) {
             return db.put(doc);
           });
         }).then(function() {
-          //return db.query(fun);
           return db.query('test/square');
         }).then(function (res) {
           log('2. query', JSON.stringify(res, null, 2));
         });
       });
     });
-    }
     return;
 
     it("Test basic view", function () {
