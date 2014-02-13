@@ -325,7 +325,7 @@ function MapReduce(db) {
           onChange: processChange,
           complete: function (err, res) {
             if (!res.last_seq) {
-              res.last_seq = seq;
+              return fulfill();
             }
             setSeq(res.last_seq).then(function () {
               fulfill(all(queue));
@@ -412,8 +412,6 @@ function MapReduce(db) {
     }
 
     return getSeq().then(function (seq) {
-      // console.log('seq is ', seq)
-
       return updateView(seq);
     }).then(function () {
       return doQuery(options);

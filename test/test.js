@@ -50,10 +50,10 @@ function tests(dbName) {
         seq = seq.then(function () {
           return db.bulkDocs({docs: docs});
         });
-        for (var i = 0; i < 5; i++) {
+        for (var i = 0; i < 1000; i++) {
           seq = seq.then(function () {
             return db.query('test/square', {key: 10, reduce: false}).then(function (res) {
-              console.log(res);
+              //console.log(res);
             });
           });
         }
