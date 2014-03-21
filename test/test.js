@@ -1602,6 +1602,7 @@ function tests(dbName, dbType, viewType) {
     });
     it('should handle user errors in reduce functions', function () {
       return new Pouch(dbName).then(function (db) {
+        db.on('error', function () { /* noop */ });
         return createView(db, {
           map : function (doc) {
             emit(doc.name);

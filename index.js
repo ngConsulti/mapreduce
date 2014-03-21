@@ -30,8 +30,7 @@ function tryCode(db, fun) {
       output : fun.apply(null, Array.prototype.slice.call(arguments, 2))
     };
   } catch (e) {
-    // TODO: tests fail even tho I call db.on('error')
-    //db.emit('error', e);
+    db.emit('error', e);
     return {error : e};
   }
 }
@@ -1010,8 +1009,7 @@ exports.query = function (fun, opts, callback) {
           if (opts.stale === 'update_after') {
             updateView(view, function (err) {
               if (err) {
-                //TODO: emit error is breaking tests
-                //view.sourceDB.emit('error', err);
+                view.sourceDB.emit('error', err);
               }
             });
           }
