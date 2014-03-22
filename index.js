@@ -103,8 +103,9 @@ var builtInReduce = {
     return values.length;
   },
 
-  "_stats": function (keys, values, rereduce) {
-
+  "_stats": function (keys, values) {
+    // no need to implement rereduce=true, because Pouch
+    // will never call it
     function sumsqr(values) {
       var _sumsqr = 0;
       var error;
@@ -112,7 +113,7 @@ var builtInReduce = {
         if (typeof values[idx] === 'number') {
           _sumsqr += values[idx] * values[idx];
         } else {
-          error =  new Error('builtin _stats function requires map values to be numbers');
+          error = new Error('builtin _stats function requires map values to be numbers');
           error.name = 'invalid_value';
           error.status = 500;
           return error;
@@ -120,26 +121,13 @@ var builtInReduce = {
       }
       return _sumsqr;
     }
-    if (rereduce) {
-      var result = values[0];
-      for (var i = 1, len = values.length; i < len; i++) {
-        var current = values[i];
-        result.sum += current.sum;
-        result.min = Math.min(result.min, current.min);
-        result.max = Math.max(result.max, current.max);
-        result.count += current.count;
-        result.sumsqr = sumsqr([result.sumsqr, current.sumsqr]);
-      }
-      return result;
-    } else {
-      return {
-        sum     : sum(values),
-        min     : Math.min.apply(null, values),
-        max     : Math.max.apply(null, values),
-        count   : values.length,
-        sumsqr : sumsqr(values)
-      };
-    }
+    return {
+      sum     : sum(values),
+      min     : Math.min.apply(null, values),
+      max     : Math.max.apply(null, values),
+      count   : values.length,
+      sumsqr : sumsqr(values)
+    };
   }
 };
 
@@ -338,7 +326,7 @@ function viewQuery(db, fun, options) {
         if (reduceError) {
           return;
         }
-        var reduceTry = tryCode(db, fun.reduce, [e.key, e.value]);
+        var reduceTry = tryCode(db, fun.reduce, [e.key, e.value, false]);
         if (reduceTry.error) {
           reduceError = true;
         } else {
@@ -576,16 +564,6 @@ function updateViewInner(view, cb) {
 
     if (!('deleted' in changeInfo)) {
       tryCode(view.sourceDB, mapFun, [changeInfo.doc]);
-      if (reduceFun) {
-        Object.keys(indexableKeysToKeyValues).forEach(function (indexableKey) {
-          var keyValue = indexableKeysToKeyValues[indexableKey];
-          var tryReduce = tryCode(view.sourceDB, reduceFun,
-            [[keyValue.key], [keyValue.value], false]);
-          if (!tryReduce.error) {
-            keyValue.reduceOutput = tryReduce.output;
-          }
-        });
-      }
     }
     saveKeyValues(view, indexableKeysToKeyValues, changeInfo.id, changeInfo.seq, function (err) {
       if (err) {
@@ -631,43 +609,40 @@ function reduceView(view, results, options, cb) {
   var shouldGroup = options.group || options.group_level;
 
   var reduceFun;
+  if (builtInReduce[view.reduceFun]) {
+    reduceFun = builtInReduce[view.reduceFun];
+  } else {
+    reduceFun = evalFunc(
+      view.reduceFun.toString(), null, sum, log, Array.isArray, JSON.parse);
+  }
 
-  var groups = [];
   var error;
+  var groups = [];
   results.forEach(function (e) {
     var last = groups[groups.length - 1];
     var key = shouldGroup ? e.key : null;
     if (last && collate(last.key[0][0], key) === 0) {
       last.key.push([key, e.id]);
-      last.value.push(e.reduceOutput);
-    } else {
-      groups.push({
-        key: [[key, e.id]],
-        value: [e.reduceOutput]
-      });
-    }
-  });
-  groups.forEach(function (e) {
-    if (e.value.length === 1) {
-      e.value = e.value[0];
-    } else { // need to rereduce
-      if (!reduceFun) {
-        // lazily initialize reduceFun
-        if (builtInReduce[view.reduceFun]) {
-          reduceFun = builtInReduce[view.reduceFun];
-        } else {
-          reduceFun = evalFunc(
-            view.reduceFun.toString(), null, sum, log, Array.isArray, JSON.parse);
-        }
-      }
-      e.value = reduceFun.call(null, null, e.value, true);
-    }
-    if (e.value.sumsqr && e.value.sumsqr.status === 500) {
-      error = e.value;
+      last.value.push(e.value);
       return;
     }
-    e.key = e.key[0][0];
+    groups.push({key: [
+      [key, e.id]
+    ], value: [e.value]});
   });
+  for (var i = 0, len = groups.length; i < len; i++) {
+    var e = groups[i];
+    var reduceTry = tryCode(view.sourceDB, reduceFun, [e.key, e.value, false]);
+    if (reduceTry.error) {
+      return reduceTry;
+    } else {
+      e.value = reduceTry.output;
+    }
+    if (e.value.sumsqr && e.value.sumsqr instanceof Error) {
+      error = e.value;
+    }
+    e.key = e.key[0][0];
+  }
   if (error) {
     return cb(error);
   }
@@ -707,45 +682,42 @@ function queryViewInner(view, opts, cb) {
   }
 
   function onMapResultsReady(results) {
-
-    // check if reduce function errored
-    shouldReduce = shouldReduce && results.every(function (value) {
-      return 'reduceOutput' in value;
-    });
-
     if (shouldReduce) {
-      return reduceView(view, results, opts, cb);
-    } else { //  just map, no reduce
-      results.forEach(function (result) {
-        delete result.reduceOutput;
-      });
-      var onComplete = function () {
-        cb(null, {
-          total_rows : totalRows,
-          offset : skip,
-          rows : results
-        });
-      };
-      if (opts.include_docs && results.length) {
-        // fetch and attach documents
-        var numDocsFetched = 0;
-        results.forEach(function (viewRow) {
-          var val = viewRow.value;
-          //in this special case, join on _id (issue #106)
-          var dbId = (val && typeof val === 'object' && val._id) || viewRow.id;
-          view.sourceDB.get(dbId, function (_, joined_doc) {
-            if (joined_doc) {
-              viewRow.doc = joined_doc;
-            }
-            if (++numDocsFetched === results.length) {
-              onComplete();
-            }
-          });
-        });
-      } else { // don't need the docs
-        onComplete();
-      }
+      var reduceResult = reduceView(view, results, opts, cb);
+      if (!(reduceResult && reduceResult.error)) {
+        return;
+      } // in case of reduce error, map results are returned
     }
+    results.forEach(function (result) {
+      delete result.reduceOutput;
+    });
+    var onComplete = function () {
+      cb(null, {
+        total_rows : totalRows,
+        offset : skip,
+        rows : results
+      });
+    };
+    if (opts.include_docs && results.length) {
+      // fetch and attach documents
+      var numDocsFetched = 0;
+      results.forEach(function (viewRow) {
+        var val = viewRow.value;
+        //in this special case, join on _id (issue #106)
+        var dbId = (val && typeof val === 'object' && val._id) || viewRow.id;
+        view.sourceDB.get(dbId, function (_, joined_doc) {
+          if (joined_doc) {
+            viewRow.doc = joined_doc;
+          }
+          if (++numDocsFetched === results.length) {
+            onComplete();
+          }
+        });
+      });
+    } else { // don't need the docs
+      onComplete();
+    }
+
   }
 
   if (typeof opts.keys !== 'undefined') {
