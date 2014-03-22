@@ -22,12 +22,12 @@ var processKey = function (key) {
   return JSON.stringify(normalizeKey(key));
 };
 
-function tryCode(db, fun) {
+function tryCode(db, fun, args) {
   // emit an event if there was an error thrown by a map/reduce function.
   // putting try/catches in a single function also avoids deoptimizations.
   try {
     return {
-      output : fun.apply(null, Array.prototype.slice.call(arguments, 2))
+      output : fun.apply(null, args)
     };
   } catch (e) {
     db.emit('error', e);
@@ -338,7 +338,7 @@ function viewQuery(db, fun, options) {
         if (reduceError) {
           return;
         }
-        var reduceTry = tryCode(db, fun.reduce, e.key, e.value);
+        var reduceTry = tryCode(db, fun.reduce, [e.key, e.value]);
         if (reduceTry.error) {
           reduceError = true;
         } else {
@@ -372,7 +372,7 @@ function viewQuery(db, fun, options) {
     onChange: function (doc) {
       if (!('deleted' in doc) && doc.id[0] !== "_" && !mapError) {
         current = {doc: doc.doc};
-        var mapTry = tryCode(db, fun.map, doc.doc);
+        var mapTry = tryCode(db, fun.map, [doc.doc]);
         if (mapTry.error) {
           mapError = true;
         }
@@ -572,12 +572,12 @@ function updateViewInner(view, cb) {
     doc = changeInfo.doc;
 
     if (!('deleted' in changeInfo)) {
-      tryCode(view.sourceDB, mapFun, changeInfo.doc);
+      tryCode(view.sourceDB, mapFun, [changeInfo.doc]);
       if (reduceFun) {
         Object.keys(indexableKeysToKeyValues).forEach(function (indexableKey) {
           var keyValue = indexableKeysToKeyValues[indexableKey];
-          var tryReduce = tryCode(view.sourceDB, reduceFun, [keyValue.key], [keyValue.value],
-            false);
+          var tryReduce = tryCode(view.sourceDB, reduceFun,
+            [[keyValue.key], [keyValue.value], false]);
           if (!tryReduce.error) {
             keyValue.reduceOutput = tryReduce.output;
           }
