@@ -24,26 +24,26 @@ exports.clone = function (obj) {
 exports.inherits = require('inherits');
 
 // this is essentially the "update sugar" function from daleharvey/pouchdb#1388
-exports.retryUntilWritten = function (db, docId, diffFunction, cb) {
+exports.retryUntilWritten = function (db, docId, diffFun, cb) {
   db.get(docId, function (err, doc) {
     if (err) {
       if (err.name !== 'not_found') {
         return cb(err);
       }
-      return tryAndPut(db, diffFunction({_id : docId}), cb);
+      return tryAndPut(db, diffFun({_id : docId}), diffFun, cb);
     }
-    doc = diffFunction(doc);
-    tryAndPut(db, doc, cb);
+    doc = diffFun(doc);
+    tryAndPut(db, doc, diffFun, cb);
   });
 };
 
-function tryAndPut(db, doc, cb) {
+function tryAndPut(db, doc, diffFun, cb) {
   db.put(doc, function (err) {
     if (err) {
       if (err.name !== 'conflict') {
         return cb(err);
       }
-      return exports.retryUntilWritten(db, doc, cb);
+      return exports.retryUntilWritten(db, doc, diffFun, cb);
     }
     cb(null);
   });
