@@ -1,4 +1,5 @@
 /*jshint expr:true */
+/* global sum */
 'use strict';
 
 var Pouch = require('pouchdb');
@@ -1623,7 +1624,183 @@ function tests(dbName, dbType, viewType) {
       });
     });
 
+    it('should properly query custom reduce functions', function () {
+      return new Pouch(dbName).then(function (db) {
+        return createView(db, {
+          map : function (doc) {
+            emit(doc.name, doc.count);
+          },
+          reduce : function (keys, values, rereduce) {
+            // calculate the average count per name
+            if (!rereduce) {
+              var result = {
+                sum : sum(values),
+                count : values.length
+              };
+              result.average = result.sum / result.count;
+              return result;
+            } else {
+              var thisSum = sum(values.map(function (value) {return value.sum; }));
+              var thisCount = sum(values.map(function (value) {return value.count; }));
+              return {
+                sum : thisSum,
+                count : thisCount,
+                average : (thisSum / thisCount)
+              };
+            }
+          }
+        }).then(function (queryFun) {
+          return db.bulkDocs({docs : [
+            {name : 'foo', count : 1},
+            {name : 'bar', count : 7},
+            {name : 'foo', count : 3},
+            {name : 'quux', count : 3},
+            {name : 'foo', count : 3},
+            {name : 'foo', count : 0},
+            {name : 'foo', count : 4},
+            {name : 'baz', count : 3},
+            {name : 'baz', count : 0},
+            {name : 'baz', count : 2}
+          ]}).then(function () {
+            return db.query(queryFun, {group : true});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              },
+              {
+                key : 'baz',
+                value : { sum: 5, count: 3, average: (5 / 3) }
+              },
+              {
+                key : 'foo',
+                value : { sum: 11, count: 5, average: (11 / 5) }
+              },
+              {
+                key : 'quux',
+                value : { sum: 3, count: 1, average: 3 }
+              }
+            ]}, 'all');
+            return db.query(queryFun, {group : false});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : null,
+                value : { sum: 26, count: 10, average: 2.6 }
+              }
+            ]}, 'group=false');
+            return db.query(queryFun, {group : true, startkey : 'bar', endkey : 'baz', skip : 1});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'baz',
+                value : { sum: 5, count: 3, average: (5 / 3) }
+              }
+            ]}, 'bar-baz skip 1');
+            return db.query(queryFun, {group : true, endkey : 'baz'});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              },
+              {
+                key : 'baz',
+                value : { sum: 5, count: 3, average: (5 / 3) }
+              }
+            ]}, '-baz');
+            return db.query(queryFun, {group : true, startkey : 'foo'});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'foo',
+                value : { sum: 11, count: 5, average: (11 / 5) }
+              },
+              {
+                key : 'quux',
+                value : { sum: 3, count: 1, average: 3 }
+              }
+            ]}, 'foo-');
+            return db.query(queryFun, {group : true, startkey : 'foo', descending : true});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'foo',
+                value : { sum: 11, count: 5, average: (11 / 5) }
+              },
+              {
+                key : 'baz',
+                value : { sum: 5, count: 3, average: (5 / 3) }
+              },
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              }
+            ]}, 'foo- descending=true');
+            return db.query(queryFun, {group : true, startkey : 'quux', skip : 1});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'quux skip 1');
+            return db.query(queryFun, {group : true, startkey : 'quux', limit : 0});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'quux limit 0');
+            return db.query(queryFun, {group : true, startkey : 'bar', endkey : 'baz'});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              },
+              {
+                key : 'baz',
+                value : { sum: 5, count: 3, average: (5 / 3) }
+              }
+            ]}, 'bar-baz');
+            return db.query(queryFun, {group : true, keys : ['bar', 'baz'], limit : 1});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              }
+            ]}, 'bar & baz');
+            return db.query(queryFun, {group : true, keys : ['bar', 'baz'], limit : 0});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'bar & baz limit 0');
+            return db.query(queryFun, {group : true, key : 'bar', limit : 0});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'key=bar limit 0');
+            return db.query(queryFun, {group : true, key : 'bar'});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+              {
+                key : 'bar',
+                value : { sum: 7, count: 1, average : 7}
+              }
+            ]}, 'key=bar');
+            return db.query(queryFun, {group : true, key : 'zork'});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'zork');
+            return db.query(queryFun, {group : true, keys : []});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'keys=[]');
+            return db.query(queryFun, {group : true, key : null});
+          }).then(function (res) {
+            res.should.deep.equal({rows : [
+            ]}, 'key=null');
+          });
+        });
+      });
+    });
+
     if (viewType === 'persisted') {
+
       it('should handle user errors in design doc names', function () {
         return new Pouch(dbName).then(function (db) {
           return db.put({

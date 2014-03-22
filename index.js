@@ -358,6 +358,9 @@ function viewQuery(db, fun, options) {
         options.complete(error);
         return;
       }
+      if (options.descending) {
+        groups.reverse();
+      }
       // no total_rows/offset when reducing
       options.complete(null, {
         rows : sliceResults(groups, options.limit, options.skip)
