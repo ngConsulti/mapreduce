@@ -1624,7 +1624,7 @@ function tests(dbName, dbType, viewType) {
     });
 
     if (viewType === 'persisted') {
-      it('should handle user errors in design docs', function () {
+      it('should handle user errors in design doc names', function () {
         return new Pouch(dbName).then(function (db) {
           return db.put({
             _id : '_design/theViewDoc'
