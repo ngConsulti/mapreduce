@@ -968,7 +968,7 @@ exports.query = function (fun, opts, callback) {
 
       var fun = doc.views && doc.views[viewName];
 
-      if (!fun) {
+      if (!fun || typeof fun.map !== 'string') {
         opts.complete({ name: 'not_found', message: 'missing_named_view' });
         return;
       }

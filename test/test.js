@@ -1811,6 +1811,17 @@ function tests(dbName, dbType, viewType) {
             should.not.exist(res);
           }).catch(function (err) {
             err.name.should.equal('not_found');
+            return db.put(({_id : '_design/void', views : {1 : null}})).then(function () {
+              return db.query('void/1');
+            }).then(function (res) {
+              should.not.exist(res);
+            }).catch(function (err) {
+              err.name.should.be.a('string');
+              // this might throw due to erroneous ddoc, but that's ok
+              return db.viewCleanup().catch(function (err) {
+                err.name.should.equal('unknown_error');
+              });
+            });
           });
         });
       });
