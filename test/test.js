@@ -698,6 +698,44 @@ function tests(dbName, dbType, viewType) {
       });
     });
 
+    it('xxx', function () {
+      this.timeout(10000);
+      return new Pouch(dbName).then(function (db) {
+        function map(doc) {
+          emit(doc.num);
+        }
+        function createView(name) {
+          var storableViewObj = {
+            map: map.toString()
+          };
+          return  db.put({
+            _id: '_design/' + name,
+            views: {
+              theView: storableViewObj
+            }
+          });
+        }
+        return db.bulkDocs({
+          docs: [
+            {_id: 'test1'}
+          ]
+        }).then(function () {
+          function sequence(name) {
+            return createView(name).then(function (ddoc) {
+              return db.query(name + '/theView').then(function () {
+                return db.viewCleanup();
+              });
+            });
+          }
+          var attempts = [];
+          for (var i = 0; i < 10; i++) {
+            attempts.push(sequence('test' + i));
+          };
+          return all(attempts);
+        });
+      });
+    });
+
     it('Testing query with keys', function () {
       return new Pouch(dbName).then(function (db) {
         return createView(db, {
