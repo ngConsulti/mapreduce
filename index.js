@@ -15,7 +15,7 @@ var utils = require('./utils');
 var taskQueue = new TaskQueue();
 taskQueue.registerTask('updateView', updateViewInner);
 taskQueue.registerTask('queryView', queryViewInner);
-taskQueue.registerTask('destroy', PouchDB.destroy);
+taskQueue.registerTask('destroyView', destroyView);
 
 var processKey = function (key) {
   // Stringify keys since we want them as map keys (see #35)
@@ -438,6 +438,15 @@ function httpQuery(db, fun, opts) {
     url: '_temp_view' + params,
     body: queryObject
   }, callback);
+}
+
+function destroyView(viewName, adapter, cb) {
+  PouchDB.destroy(viewName, {adapter : adapter}, function (err) {
+    if (err) {
+      return cb(err);
+    }
+    return cb(null);
+  });
 }
 
 function saveKeyValues(view, indexableKeysToKeyValues, docId, seq, cb) {
@@ -875,7 +884,7 @@ exports.viewCleanup = function (origCallback) {
           utils.uniq(dbsToDelete).forEach(function (viewDBName) {
             numStarted++;
 
-            taskQueue.addTask('destroy', [viewDBName, function (err) {
+            taskQueue.addTask('destroyView', [viewDBName, db.adapter, function (err) {
               if (err) {
                 gotError = err;
               }
