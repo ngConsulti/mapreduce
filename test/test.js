@@ -604,6 +604,61 @@ function tests(dbName, dbType, viewType) {
       });
     });
 
+    it('xxx - multiple view creations and cleanups', function () {
+      this.timeout(10000);
+      return new Pouch(dbName).then(function (db) {
+        var map = function (doc) {
+          emit(doc.num);
+        };
+        function createView(name) {
+          var storableViewObj = {
+            map: map.toString()
+          };
+          return  db.put({
+            _id: '_design/' + name,
+            views: {
+              theView: storableViewObj
+            }
+          });
+        }
+        return db.bulkDocs({
+          docs: [
+            {_id: 'test1'}
+          ]
+        }).then(function () {
+          function sequence(name) {
+            return createView(name).then(function (ddoc) {
+              return db.query(name + '/theView').then(function () {
+                return db.viewCleanup();
+              });
+            });
+          }
+          var attempts = [];
+          var numAttempts = 10;
+          for (var i = 0; i < numAttempts; i++) {
+            attempts.push(sequence('test' + i));
+          }
+          return all(attempts).then(function () {
+            var keys = [];
+            for (var i = 0; i < numAttempts; i++) {
+              keys.push('_design/test' + i);
+            }
+            return db.allDocs({keys : keys, include_docs : true});
+          }).then(function (res) {
+            var docs = res.rows.map(function (row) {
+              row.doc._deleted = true;
+              return row.doc;
+            });
+            return db.bulkDocs({docs : docs});
+          }).then(function () {
+            return db.viewCleanup();
+          }).then(function (res) {
+            res.ok.should.equal(true);
+          });
+        });
+      });
+    });
+
     it('If reduce function returns 0, resulting value should not be null', function () {
       return new Pouch(dbName).then(function (db) {
         return createView(db, {

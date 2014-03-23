@@ -17,6 +17,7 @@ module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
       doc.views = doc.views || {};
       doc.views[fullViewName] = doc.views[fullViewName] || {};
       doc.views[fullViewName][name] = true;
+      doc._deleted = false;
       return doc;
     }
     utils.retryUntilWritten(sourceDB, '_local/mrviews', diffFunction, function (err) {
@@ -24,7 +25,6 @@ module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
         return cb(err);
       }
       var pouchOpts = {
-        auto_compaction : true,
         adapter : sourceDB.adapter
       };
       new PouchDB(name, pouchOpts, function (err, db) {

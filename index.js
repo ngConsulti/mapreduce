@@ -15,7 +15,7 @@ var utils = require('./utils');
 var taskQueue = new TaskQueue();
 taskQueue.registerTask('updateView', updateViewInner);
 taskQueue.registerTask('queryView', queryViewInner);
-taskQueue.registerTask('destroyView', destroyView);
+taskQueue.registerTask('localViewCleanup', localViewCleanupInner);
 
 var processKey = function (key) {
   // Stringify keys since we want them as map keys (see #35)
@@ -526,7 +526,6 @@ function updateView(view, cb) {
 }
 
 function updateViewInner(view, cb) {
-
   // bind the emit function once
   var indexableKeysToKeyValues;
   var emitCounter;
@@ -817,6 +816,79 @@ function httpViewCleanup(db, cb) {
   }, cb);
 }
 
+function localViewCleanup(db, callback) {
+  taskQueue.addTask('localViewCleanup', [db, callback]);
+  taskQueue.execute();
+}
+
+function localViewCleanupInner(db, callback) {
+  db.get('_local/mrviews', function (err, metaDoc) {
+    if (err && err.name !== 'not_found') {
+      return callback(err);
+    } else if (metaDoc && metaDoc.views) {
+      var docsToViews = {};
+      Object.keys(metaDoc.views).forEach(function (fullViewName) {
+        var parts = fullViewName.split('/');
+        var designDocName = '_design/' + parts[0];
+        var viewName = parts[1];
+        docsToViews[designDocName] = docsToViews[designDocName] || {};
+        docsToViews[designDocName][viewName] = true;
+      });
+      var opts = {
+        keys : Object.keys(docsToViews),
+        include_docs : true
+      };
+      db.allDocs(opts, function (err, res) {
+        if (err) {
+          return callback(err);
+        }
+        var numStarted = 0;
+        var numDone = 0;
+        var gotError;
+        function checkDone() {
+          if (numStarted === numDone) {
+            if (gotError) {
+              return callback(gotError);
+            }
+            callback(null, {ok : true});
+          }
+        }
+        var viewsToStatus = {};
+        res.rows.forEach(function (row) {
+          Object.keys(docsToViews[row.key]).forEach(function (viewName) {
+            var viewDBNames = Object.keys(metaDoc.views[row.key.substring(8) + '/' + viewName]);
+            // design doc deleted, or view function nonexistent
+            var statusIsGood = row.doc && row.doc.views && row.doc.views[viewName];
+            viewDBNames.forEach(function (viewDBName) {
+              viewsToStatus[viewDBName] = viewsToStatus[viewDBName] || statusIsGood;
+            });
+          });
+        });
+        var dbsToDelete = Object.keys(viewsToStatus).filter(function (viewDBName) {
+          return !viewsToStatus[viewDBName];
+        });
+        if (!dbsToDelete.length) {
+          return callback(null, {ok : true});
+        }
+        utils.uniq(dbsToDelete).forEach(function (viewDBName) {
+          numStarted++;
+
+          destroyView(viewDBName, db.adapter, function (err) {
+            if (err) {
+              gotError = err;
+            }
+            numDone++;
+            checkDone();
+          });
+        });
+        taskQueue.execute();
+      });
+    } else {
+      return callback(null, {ok : true});
+    }
+  });
+}
+
 exports.viewCleanup = function (origCallback) {
   var db = this;
   var realCB;
@@ -840,64 +912,7 @@ exports.viewCleanup = function (origCallback) {
       return httpViewCleanup(db, callback);
     }
 
-    db.get('_local/mrviews', function (err, metaDoc) {
-      if (err && err.name !== 'not_found') {
-        return callback(err);
-      } else if (metaDoc && metaDoc.views) {
-        var docsToViews = {};
-        Object.keys(metaDoc.views).forEach(function (fullViewName) {
-          var parts = fullViewName.split('/');
-          var designDocName = '_design/' + parts[0];
-          var viewName = parts[1];
-          docsToViews[designDocName] = docsToViews[designDocName] || {};
-          docsToViews[designDocName][viewName] = true;
-        });
-        var opts = {
-          keys : Object.keys(docsToViews),
-          include_docs : true
-        };
-        db.allDocs(opts, function (err, res) {
-          if (err) {
-            return callback(err);
-          }
-          var numStarted = 0;
-          var numDone = 0;
-          var gotError;
-          function checkDone() {
-            if (numStarted === numDone) {
-              if (gotError) {
-                return callback(gotError);
-              }
-              callback(null, {ok : true});
-            }
-          }
-          var dbsToDelete = [];
-          res.rows.forEach(function (row) {
-            Object.keys(docsToViews[row.key]).forEach(function (viewName) {
-              if (!row.doc || !row.doc[viewName]) {
-                // design doc deleted, or view function nonexistent
-                var viewDBNames = metaDoc.views[row.key.substring(8) + '/' + viewName];
-                dbsToDelete = dbsToDelete.concat(Object.keys(viewDBNames));
-              }
-            });
-          });
-          utils.uniq(dbsToDelete).forEach(function (viewDBName) {
-            numStarted++;
-
-            taskQueue.addTask('destroyView', [viewDBName, db.adapter, function (err) {
-              if (err) {
-                gotError = err;
-              }
-              numDone++;
-              checkDone();
-            }]);
-          });
-          taskQueue.execute();
-        });
-      } else {
-        return callback(null, {ok : true});
-      }
-    });
+    return localViewCleanup(db, callback);
   });
 
   if (realCB) {
