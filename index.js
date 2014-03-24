@@ -1,6 +1,5 @@
 'use strict';
 
-var PouchDB = require('pouchdb');
 var pouchCollate = require('pouchdb-collate');
 var Promise = typeof global.Promise === 'function' ? global.Promise : require('lie');
 var TaskQueue = require('./taskqueue');
@@ -440,7 +439,7 @@ function httpQuery(db, fun, opts) {
   }, callback);
 }
 
-function destroyView(viewName, adapter, cb) {
+function destroyView(viewName, adapter, PouchDB, cb) {
   PouchDB.destroy(viewName, {adapter : adapter}, function (err) {
     if (err) {
       return cb(err);
@@ -521,7 +520,7 @@ function saveKeyValues(view, indexableKeysToKeyValues, docId, seq, cb) {
 }
 
 function updateView(view, cb) {
-  taskQueue.addTask('updateView', [view, cb]);
+  taskQueue.addTask(view.sourceDB, 'updateView', [view, cb]);
   taskQueue.execute();
 }
 
@@ -583,7 +582,6 @@ function updateViewInner(view, cb) {
       }
     });
   }
-
   var queue = new TaskQueue();
   queue.registerTask('processChange', processChange);
 
@@ -593,7 +591,7 @@ function updateViewInner(view, cb) {
     since : view.seq,
     onChange: function (doc) {
       numStarted++;
-      queue.addTask('processChange', [doc, function (err) {
+      queue.addTask(view.sourceDB, 'processChange', [doc, function (err) {
         if (err && !gotError) {
           gotError = err;
           return cb(err);
@@ -661,7 +659,7 @@ function reduceView(view, results, options, cb) {
 }
 
 function queryView(view, opts, cb) {
-  taskQueue.addTask('queryView', [view, opts, cb]);
+  taskQueue.addTask(view.sourceDB, 'queryView', [view, opts, cb]);
   taskQueue.execute();
 }
 
@@ -817,7 +815,7 @@ function httpViewCleanup(db, cb) {
 }
 
 function localViewCleanup(db, callback) {
-  taskQueue.addTask('localViewCleanup', [db, callback]);
+  taskQueue.addTask(db, 'localViewCleanup', [db, callback]);
   taskQueue.execute();
 }
 
@@ -873,7 +871,7 @@ function localViewCleanupInner(db, callback) {
         utils.uniq(dbsToDelete).forEach(function (viewDBName) {
           numStarted++;
 
-          destroyView(viewDBName, db.adapter, function (err) {
+          destroyView(viewDBName, db.adapter, db.constructor, function (err) {
             if (err) {
               gotError = err;
             }

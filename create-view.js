@@ -1,6 +1,5 @@
 'use strict';
 
-var PouchDB = require('pouchdb');
 var utils = require('./utils');
 
 module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
@@ -8,6 +7,8 @@ module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
     if (err) {
       return cb(err);
     }
+    var PouchDB = sourceDB.constructor;
+
     var name = info.db_name + '-mrview-' + PouchDB.utils.Crypto.MD5(mapFun.toString() +
       (reduceFun && reduceFun.toString()));
 

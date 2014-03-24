@@ -3,8 +3,6 @@
  * Simple task queue to sequentialize actions. Assumes callbacks will eventually fire (once).
  */
 
-var PouchDB = require('pouchdb');
-
 module.exports = TaskQueue;
 
 function TaskQueue() {
@@ -40,12 +38,12 @@ TaskQueue.prototype.callTask = function (task) {
   } catch (err) {
     // unexpected error, bubble up if they're not handling the emitted 'error' event
     self.isReady = true;
-    PouchDB.emit('error', err);
+    task.emitter.emit('error', err);
   }
 };
 
-TaskQueue.prototype.addTask = function (name, parameters) {
-  var task = { name: name, parameters: parameters };
+TaskQueue.prototype.addTask = function (emitter, name, parameters) {
+  var task = { name: name, parameters: parameters, emitter : emitter };
   this.queue.push(task);
   return task;
 };
