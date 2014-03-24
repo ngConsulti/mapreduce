@@ -42,6 +42,6 @@
     "pouchdb": "^2.0.0"
   },
   "peerDependencies": {
-    "pouchdb": "^2.0.0"
+    "pouchdb": ">= 2.0.0"
   }
 }
