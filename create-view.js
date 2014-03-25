@@ -21,7 +21,7 @@ module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
       doc._deleted = false;
       return doc;
     }
-    utils.retryUntilWritten(sourceDB, '_local/mrviews', diffFunction, function (err) {
+    PouchDB.utils.retryUntilWritten(sourceDB, '_local/mrviews', diffFunction, function (err) {
       if (err) {
         return cb(err);
       }
@@ -32,18 +32,23 @@ module.exports = function (sourceDB, fullViewName, mapFun, reduceFun, cb) {
         if (err) {
           return cb(err);
         }
-        var view = new View(name, db, sourceDB, mapFun, reduceFun);
-        view.db.get('_local/lastSeq', function (err, lastSeqDoc) {
+        PouchDB.registerDependentDatabase(sourceDB, db, function (err) {
           if (err) {
-            if (err.name !== 'not_found') {
-              return cb(err);
-            } else {
-              view.seq = 0;
-            }
-          } else {
-            view.seq = lastSeqDoc.seq;
+            return cb(err);
           }
-          cb(null, view);
+          var view = new View(name, db, sourceDB, mapFun, reduceFun);
+          view.db.get('_local/lastSeq', function (err, lastSeqDoc) {
+            if (err) {
+              if (err.name !== 'not_found') {
+                return cb(err);
+              } else {
+                view.seq = 0;
+              }
+            } else {
+              view.seq = lastSeqDoc.seq;
+            }
+            cb(null, view);
+          });
         });
       });
     });
